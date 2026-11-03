@@ -57,6 +57,9 @@ class Config:
     voice_practice_only: bool = True
     # Corner drill: a corner counts as "on target" within this many seconds of the reference
     focus_target: float = 0.05
+    # Updates from GitHub Releases: "auto" (install when not driving), "notify" or "off"
+    update_mode: str = "auto"
+    update_repo: str = "DevonAllies/ai-training-"
 
     @classmethod
     def path(cls) -> Path:

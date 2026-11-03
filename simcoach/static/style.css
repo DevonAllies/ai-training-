@@ -113,3 +113,6 @@ a { color: var(--accent); }
 .report-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 @media (max-width: 900px) { .report-grid { grid-template-columns: minmax(0, 1fr); } }
 .logo { width: 22px; height: 22px; vertical-align: -4px; margin-right: 8px; border-radius: 5px; }
+
+.update-banner { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap;
+  padding: 8px 16px; background: rgba(62,166,255,.14); border-bottom: 1px solid var(--line); }

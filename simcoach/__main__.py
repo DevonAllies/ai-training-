@@ -82,12 +82,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-browser", action="store_true", help="Don't open the dashboard")
     ap.add_argument("--no-overlay", action="store_true", help="Don't show the in-game overlay window")
     ap.add_argument("--no-tray", action="store_true", help="Don't show the system-tray icon")
+    ap.add_argument("--no-update", action="store_true", help="Don't check for updates")
+    ap.add_argument("--updated", action="store_true", help=argparse.SUPPRESS)   # relaunch after update
     ap.add_argument("--import", dest="import_files", nargs="*", metavar="XLSX",
                     help="Import Garage 61 session export(s) and exit")
     ap.add_argument("--version", action="version", version=f"SimCoach {__version__}")
     args = ap.parse_args(argv)
 
     log_path = _setup_logging()
+    if args.updated:
+        args.no_browser = True
     url = f"http://127.0.0.1:{args.port}/"
 
     if args.import_files:
@@ -116,9 +120,26 @@ def main(argv: list[str] | None = None) -> None:
     if args.demo:
         from . import demo
         engine.set_reference(demo.reference_lap())
-    app = create_app(engine, config, demo_mode=args.demo)
+    server_ref: dict = {}
+
+    def quit_all():
+        stop.set()
+        if "server" in server_ref:
+            server_ref["server"].should_exit = True
+
+    stop = threading.Event()
+    from .updater import Updater
+    updater = Updater(config, __version__,
+                      is_busy=lambda: bool(engine.connected and engine.last_sample
+                                           and engine.last_sample.get("on_track")),
+                      on_quit=quit_all)
+    app = create_app(engine, config, demo_mode=args.demo, updater=updater)
     engine.on_session_change = auto_sector_targets
     engine.start()
+    if not args.no_update and not args.demo:
+        updater.start()
+    if args.updated:
+        log.info("Updated to %s", __version__)
 
     print(f"\n  SimCoach {__version__} running at {url}\n  Browser overlay: {url}overlay\n"
           f"  Press Ctrl+C to quit.\n")
@@ -127,16 +148,12 @@ def main(argv: list[str] | None = None) -> None:
 
     server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port,
                                            log_level="warning", log_config=None))
-    stop = threading.Event()
-
-    def quit_all():
-        stop.set()
-        server.should_exit = True
+    server_ref["server"] = server
 
     tray = None
     if not args.no_tray:
         from .tray import Tray
-        tray = Tray(config, url, quit_all)
+        tray = Tray(config, url, quit_all, updater)
         if not tray.start():
             tray = None
 
@@ -168,6 +185,7 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         if tray:
             tray.stop()
+        updater.stop()
         engine.stop()
         log.info("SimCoach stopped")
 

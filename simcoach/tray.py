@@ -18,7 +18,8 @@ ICON = Path(__file__).parent / "static" / "icon.png"
 
 
 class Tray:
-    def __init__(self, config: Config, url: str, on_quit):
+    def __init__(self, config: Config, url: str, on_quit, updater=None):
+        self.updater = updater
         self.config = config
         self.url = url
         self.on_quit = on_quit
@@ -52,6 +53,8 @@ class Tray:
                 mode_item("Detailed", "voice_mode", "detailed"),
                 mode_item("Off", "voice_mode", "off"))),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(lambda item: self._update_label(), self._update_action,
+                             visible=lambda item: self.updater is not None),
             pystray.MenuItem("Quit SimCoach", self._quit),
         )
         try:
@@ -62,6 +65,22 @@ class Tray:
         except Exception as exc:
             log.warning("Could not start tray icon: %s", exc)
             return False
+
+    def _update_label(self) -> str:
+        st = self.updater.status() if self.updater else {}
+        if st.get("status") == "ready":
+            return f"Install update {st.get('latest')} now"
+        if st.get("status") == "downloading":
+            return f"Downloading update… {int(st.get('progress', 0) * 100)}%"
+        return "Check for updates"
+
+    def _update_action(self, icon=None, item=None):
+        if not self.updater:
+            return
+        if self.updater.status().get("status") == "ready":
+            self.updater.install(force=True)
+        else:
+            self.updater.check_soon()
 
     def _save(self):
         try:

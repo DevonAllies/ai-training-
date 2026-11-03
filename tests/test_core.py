@@ -318,3 +318,109 @@ def test_no_memory_growth_over_long_session():
     # 10 more laps of history (bounded deques) may add a little - but not per-sample growth
     assert growth < 400_000, f"memory grew by {growth} bytes over 10 laps"
     assert len(eng.events) <= 30 and len(eng.coach.history) <= 100
+
+
+# ------------------------------------------------------------------ v4: auto-update
+class _FakeResp:
+    def __init__(self, status=200, json_data=None, text="", content=b""):
+        self.status_code, self._json, self.text, self._content = status, json_data, text, content
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def iter_content(self, chunk_size):
+        for i in range(0, len(self._content), chunk_size):
+            yield self._content[i:i + chunk_size]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_release(payload: bytes, digest=True, sums=True, tag="v9.9.9"):
+    import hashlib
+    sha = hashlib.sha256(payload).hexdigest()
+    assets = [{"name": f"SimCoach-Setup-{tag[1:]}.exe", "size": len(payload),
+               "browser_download_url": f"https://github.com/o/r/releases/download/{tag}/SimCoach-Setup-{tag[1:]}.exe",
+               **({"digest": f"sha256:{sha}"} if digest else {})}]
+    if sums:
+        assets.append({"name": "SHA256SUMS.txt",
+                       "browser_download_url": f"https://github.com/o/r/releases/download/{tag}/SHA256SUMS.txt"})
+    rel = {"tag_name": tag, "assets": assets, "body": "notes", "html_url": "https://github.com/o/r/releases/x"}
+    return rel, f"{sha}  SimCoach-Setup-{tag[1:]}.exe\n"
+
+
+def _updater_with(rel, sums_text, payload):
+    from simcoach.updater import Updater
+
+    def get(url, **kw):
+        if url.endswith("/releases/latest"):
+            return _FakeResp(json_data=rel) if rel else _FakeResp(status=404)
+        if url.endswith("SHA256SUMS.txt"):
+            return _FakeResp(text=sums_text)
+        return _FakeResp(content=payload)
+    u = Updater(Config(update_mode="notify"), "0.3.0")
+    u.http.get = get
+    return u
+
+
+def test_version_compare():
+    from simcoach.updater import is_newer
+    assert is_newer("0.3.1", "0.3.0") and is_newer("v1.0", "0.9.9") and is_newer("0.10.0", "0.9.0")
+    assert not is_newer("0.3.0", "0.3.0") and not is_newer("0.2.9", "0.3.0")
+    assert not is_newer("0.3.0", "0.3.0.0")
+
+
+def test_updater_downloads_and_verifies():
+    payload = b"fake installer" * 1000
+    rel, sums = _fake_release(payload)
+    u = _updater_with(rel, sums, payload)
+    st = u.run_once()
+    assert st["status"] == "ready" and st["latest"] == "9.9.9" and st["progress"] == 1.0
+    from pathlib import Path
+    assert Path(st["file"]).read_bytes() == payload
+    # not the installed Windows app here -> refuses to self-install, stays ready
+    assert u.install(force=True)["status"] == "ready"
+
+
+def test_updater_rejects_bad_checksum_and_missing_checksum():
+    payload = b"real"
+    rel, _ = _fake_release(payload, digest=False)
+    u = _updater_with(rel, "0" * 64 + "  SimCoach-Setup-9.9.9.exe\n", b"tampered")
+    assert u.run_once()["status"] == "error" and "checksum" in u.status()["error"]
+    rel2, _ = _fake_release(payload, digest=False, sums=False, tag="v9.9.8")
+    u2 = _updater_with(rel2, "", payload)
+    assert u2.run_once()["status"] == "error" and "no checksum" in u2.status()["error"]
+
+
+def test_updater_up_to_date_and_no_release():
+    rel, sums = _fake_release(b"x", tag="v0.3.0")
+    assert _updater_with(rel, sums, b"x").check()["status"] == "up_to_date"
+    assert _updater_with(None, "", b"").check()["status"] == "up_to_date"
+
+
+def test_updater_refuses_foreign_hosts():
+    from simcoach.updater import _allowed
+    assert _allowed("https://github.com/o/r/releases/download/v1/a.exe")
+    assert _allowed("https://objects.githubusercontent.com/x")
+    assert not _allowed("http://github.com/x") and not _allowed("https://evil.com/github.com")
+    assert not _allowed("https://github.com.evil.com/x")
+
+
+def test_update_api_endpoints():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    payload = b"abc" * 100
+    rel, sums = _fake_release(payload)
+    u = _updater_with(rel, sums, payload)
+    cfg = Config()
+    client = TestClient(create_app(LiveEngine(cfg, DemoSource()), cfg, updater=u))
+    assert client.get("/api/update").json()["status"] == "idle"
+    assert client.post("/api/update/check").json()["status"] == "ready"
+    assert client.post("/api/config", json={"update_mode": "off"}).json()["update_mode"] == "off"

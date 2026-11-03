@@ -43,6 +43,7 @@ class TokenIn(BaseModel):
     voice_practice_only: bool | None = None
     focus_target: float | None = None
     start_with_windows: bool | None = None
+    update_mode: str | None = None
 
 
 class FocusIn(BaseModel):
@@ -58,7 +59,7 @@ class RefIn(BaseModel):
     lap: str                     # "g61:<id>", "local:<file>", "demo:ref" or "session_best"
 
 
-def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> FastAPI:
+def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, updater=None) -> FastAPI:
     app = FastAPI(title="SimCoach", version=__version__)
     state = {"g61": Garage61Client(config.garage61_token)}
     if engine.on_session_change is None:
@@ -177,6 +178,10 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
         if body.focus_target is not None:
             config.focus_target = max(0.0, min(1.0, body.focus_target))
             engine.coach.focus.target = config.focus_target
+        if body.update_mode in ("auto", "notify", "off"):
+            config.update_mode = body.update_mode
+            if updater and body.update_mode != "off":
+                updater.check_soon()
         if body.start_with_windows is not None:
             from . import autostart
             try:
@@ -360,6 +365,31 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
         label = f"best sectors – {a.get('track')} ({(a.get('date') or '')[:10]})"
         engine.set_sector_targets(a["best_sectors"], label)
         return {"targets": a["best_sectors"], "label": label}
+
+    # --------------------------------------------------------------- updates
+    @app.get("/api/update")
+    def update_status():
+        if updater is None:
+            return {"status": "disabled", "current": __version__, "mode": config.update_mode}
+        return updater.status()
+
+    @app.post("/api/update/check")
+    def update_check():
+        if updater is None:
+            raise HTTPException(400, "Updater not running")
+        try:
+            return updater.run_once()
+        except Exception as exc:
+            raise HTTPException(502, f"Update check failed: {exc}") from exc
+
+    @app.post("/api/update/install")
+    def update_install():
+        if updater is None:
+            raise HTTPException(400, "Updater not running")
+        st = updater.status()
+        if st["status"] == "available":
+            updater.download()
+        return updater.install(force=True)
 
     # ----------------------------------------------------------------- coach
     @app.get("/api/coach/report")
