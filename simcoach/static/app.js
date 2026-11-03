@@ -519,6 +519,8 @@ async function loadSettings() {
   $("#s-overlay").value = c.overlay_mode || "practice";
   $("#s-opacity").value = c.overlay_opacity || 0.85;
   $("#s-voice").value = c.voice_mode || "cues";
+  $("#s-update").value = c.update_mode || "auto";
+  refreshUpdate();
   $("#s-autostart").checked = !!c.start_with_windows;
   $("#s-autostart-row").classList.toggle("hidden", !c.autostart_supported);
   $("#s-voice-native").checked = c.voice_native !== false;
@@ -532,6 +534,7 @@ $("#btn-save").addEventListener("click", async () => {
     overlay_mode: $("#s-overlay").value, overlay_opacity: parseFloat($("#s-opacity").value),
     voice_mode: $("#s-voice").value, voice_native: $("#s-voice-native").checked,
     voice_practice_only: $("#s-voice-practice").checked,
+    update_mode: $("#s-update").value,
     ...(document.querySelector("#s-autostart-row").classList.contains("hidden") ? {} : { start_with_windows: $("#s-autostart").checked }),
     focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
@@ -554,6 +557,46 @@ $("#btn-voice-test").addEventListener("click", async () => {
     msg($("#s-msg"), r.backend === "unavailable" ? "Windows voice not available – use the browser overlay with ?voice=1." : "Speaking…", "ok"); }
   catch (e) { msg($("#s-msg"), e.message, "err"); }
 });
+// ------------------------------------------------------------ updates
+function describeUpdate(u) {
+  const when = u.checked_at ? " · checked " + new Date(u.checked_at * 1000).toLocaleTimeString() : "";
+  switch (u.status) {
+    case "up_to_date": return `You're on the latest version (v${u.current})${when}` + (u.error ? ` – ${u.error}` : "");
+    case "checking": return "Checking for updates…";
+    case "available": return `Version ${u.latest} is available.`;
+    case "downloading": return `Downloading ${u.latest}… ${Math.round((u.progress || 0) * 100)}%`;
+    case "ready": return `Version ${u.latest} is downloaded and verified.` + (u.can_install ? "" : " (Install manually – automatic install only works in the installed app.)");
+    case "installing": return `Installing ${u.latest} – SimCoach will restart in a moment…`;
+    case "error": return `Update problem: ${u.error}`;
+    case "disabled": return "Updates are disabled in this mode.";
+    default: return `v${u.current}`;
+  }
+}
+let updateDismissed = null;
+async function refreshUpdate() {
+  let u; try { u = await api("/api/update"); } catch { return; }
+  $("#update-status").textContent = describeUpdate(u);
+  const show = (u.status === "ready" || u.status === "installing") && updateDismissed !== u.latest;
+  $("#update-banner").classList.toggle("hidden", !show);
+  if (show) {
+    $("#update-text").textContent = u.status === "installing" ? describeUpdate(u)
+      : `SimCoach ${u.latest} is ready to install (you have ${u.current}).`;
+    $("#update-install").classList.toggle("hidden", u.status !== "ready" || !u.can_install);
+  }
+}
+$("#update-install").addEventListener("click", async () => {
+  try { await api("/api/update/install", { method: "POST" }); refreshUpdate(); } catch (e) { alert(e.message); }
+});
+$("#update-later").addEventListener("click", async () => {
+  const u = await api("/api/update"); updateDismissed = u.latest; $("#update-banner").classList.add("hidden");
+});
+$("#btn-update-check").addEventListener("click", async () => {
+  $("#update-status").textContent = "Checking for updates…";
+  try { const u = await api("/api/update/check", { method: "POST" }); $("#update-status").textContent = describeUpdate(u); refreshUpdate(); }
+  catch (e) { $("#update-status").textContent = e.message; }
+});
+setInterval(refreshUpdate, 30000);
+
 function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach((e) => (e.textContent = spdUnit())); }
 
 // ------------------------------------------------------------ boot
@@ -565,5 +608,6 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
     if (!st.config.has_token && !st.demo) showTab("settings");
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});
+  refreshUpdate();
   connectWS();
 })();

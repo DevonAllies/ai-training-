@@ -20,6 +20,12 @@
   <div id="conn" class="pill">…</div>
 </header>
 
+<div id="update-banner" class="update-banner hidden">
+  <span id="update-text"></span>
+  <button id="update-install" class="primary small">Install &amp; restart</button>
+  <button id="update-later" class="small">Later</button>
+</div>
+
 <!-- ============================== LIVE ============================== -->
 <section id="tab-live" class="tab-page active">
   <div class="session-bar">
@@ -246,6 +252,14 @@
     <label class="block">Corner drill target (seconds within reference)
       <input id="s-focus-target" type="text" inputmode="decimal"></label>
     <div class="actions"><button id="btn-voice-test" class="small">Test voice</button></div>
+    <h3>Updates</h3>
+    <p class="muted">SimCoach is one self-contained app (Python and all libraries are built in). It checks GitHub for new
+      versions, verifies the download and installs it for you – never while you're on track.</p>
+    <label class="block">Automatic updates
+      <select id="s-update"><option value="auto">Install automatically when I'm not driving</option>
+        <option value="notify">Download, then ask me</option><option value="off">Off</option></select></label>
+    <div id="update-status" class="muted"></div>
+    <div class="actions"><button id="btn-update-check" class="small">Check for updates now</button></div>
     <div class="actions"><button id="btn-save" class="primary">Save</button> <button id="btn-test">Test connection</button></div>
     <div id="s-msg" class="msg"></div>
   </div>
