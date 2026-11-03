@@ -139,3 +139,9 @@ details summary { cursor: pointer; margin-top: 8px; }
 #corner-table tr { cursor: pointer; }
 .lan-qr { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; margin: 6px 0; }
 .lan-qr img { width: 200px; height: 200px; display: block; image-rendering: pixelated; }
+
+.plan-step.done { border-left-color: var(--good); opacity: .7; }
+.plan-step.active { border-left-color: var(--ref); background: rgba(245,184,61,.08); }
+.plan-step .actions { margin-top: 6px; }
+.drill-results { list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; }
+.drill-results li { padding: 2px 0; }

@@ -182,11 +182,14 @@ function renderDrill(f) {
     return;
   }
   const dots = Array.from({ length: f.needed }, (_, i) => `<i class="${i < f.streak ? "on" : ""}"></i>`).join("");
-  el.innerHTML = `<div><span class="big">${esc(f.title || f.name || "–")}</span><span class="streak">${dots}</span></div>
-    <div>${esc(f.message || "")}</div>
-    <div class="muted small-text">Target: within ${f.target.toFixed(2)}s of the reference · attempts ${f.attempts}
-      ${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
-    ${f.completed.length ? `<div class="muted small-text">Mastered: ${f.completed.map(esc).join(", ")}</div>` : ""}`;
+  const ladder = f.kind === "brake_ladder" && (f.ladder_target != null || f.ladder_locked != null)
+    ? `<div class="small-text"><b>Brake point target:</b> ${(f.ladder_locked ?? f.ladder_target).toFixed(0)} m vs reference${f.ladder_locked != null ? " (locked – hit it)" : " (5 m later each lap)"}</div>` : "";
+  el.innerHTML = `<div><span class="big">${esc(f.title || f.name || "–")}</span> <span class="badge">${esc(f.drill || "")}</span><span class="streak">${dots}</span></div>
+    <div class="muted small-text">${esc(f.how || "")}</div>
+    <div style="margin-top:4px">${esc(f.message || "")}</div>${ladder}
+    <ul class="drill-results">${(f.results || []).slice().reverse().map((x) => `<li><span class="sev ${x.ok ? "good" : "bad"}"></span>#${x.attempt}: ${esc(x.text)}</li>`).join("")}</ul>
+    <div class="muted small-text">Attempts ${f.attempts}${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
+    ${f.completed.length ? `<div class="muted small-text">Done: ${f.completed.map(esc).join(", ")}</div>` : ""}`;
 }
 
 function fillDrillCorners() {
@@ -199,7 +202,7 @@ function fillDrillCorners() {
 $("#drill-auto").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "auto" } }));
 $("#drill-stop").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "stop" } }));
 $("#drill-corner").addEventListener("change", (e) => {
-  if (e.target.value !== "") api("/api/coach/focus", { method: "POST", body: { action: "corner", corner: +e.target.value } });
+  if (e.target.value !== "") api("/api/coach/focus", { method: "POST", body: { action: "corner", corner: +e.target.value, kind: $("#drill-kind").value || null } });
 });
 
 async function loadReport() {
@@ -471,10 +474,39 @@ $("#pg-plan").addEventListener("click", async () => {
   const c = (state.combos || [])[+$("#pg-combo").value];
   const q = new URLSearchParams({ minutes: $("#pg-min").value, ...(c ? { track: c.track, car: c.car } : {}) });
   const r = await api("/api/practice_plan?" + q);
-  $("#pg-plan-out").innerHTML = r.plan.length ? `<p class="muted small-text">Based on ${esc(r.source)}.</p>` +
-    r.plan.map((p, i) => `<div class="plan-step"><b>${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}</div>`).join("")
-    : `<span class="muted">${esc(r.note || "No data yet.")}</span>`;
+  state.planSource = r.source;
+  renderPlan(r.plan, r.note);
 });
+
+function renderPlan(plan, note) {
+  const el = $("#pg-plan-out");
+  if (!plan || !plan.length) { el.innerHTML = `<span class="muted">${esc(note || "No data yet.")}</span>`; return; }
+  const done = plan.filter((p) => p.status === "done").length;
+  el.innerHTML = `<p class="muted small-text">${state.planSource ? "Based on " + esc(state.planSource) + " · " : ""}${done}/${plan.length} done</p>` +
+    plan.map((p, i) => `<div class="plan-step ${p.status || ""}"><b>${p.status === "done" ? "✓ " : ""}${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}
+      <div class="actions">${p.drill ? `<button class="small primary" data-start="${i}">${p.status === "active" ? "Restart drill" : "Start drill"}</button>` : ""}
+        ${p.action === "optimal" ? `<button class="small primary" data-optimal="${i}">Build optimal lap &amp; use it</button>` : ""}
+        ${p.status !== "done" ? `<button class="small" data-done="${i}">Mark done</button>` : ""}</div></div>`).join("");
+}
+$("#pg-plan-out").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  try {
+    if (b.dataset.start !== undefined) {
+      const r = await api(`/api/plan/${b.dataset.start}/start`, { method: "POST" });
+      renderPlan(r.plan); msg($("#s-msg"), "");
+      alert(`Drill started: ${r.focus.drill} on ${r.focus.title}. Head out – the overlay and voice will coach this corner.`);
+    } else if (b.dataset.optimal !== undefined) {
+      await api("/api/optimal", { method: "POST", body: { include_teammates: true, set_reference: true } });
+      const r = await api(`/api/plan/${b.dataset.optimal}/start`, { method: "POST" }); renderPlan(r.plan);
+    } else if (b.dataset.done !== undefined) {
+      const r = await api(`/api/plan/${b.dataset.done}/done`, { method: "POST" }); renderPlan(r.plan);
+    }
+  } catch (e) { alert(e.message); }
+});
+setInterval(async () => {                       // keep ticks in sync when a drill completes on track
+  if (!$("#tab-progress").classList.contains("active")) return;
+  try { const r = await api("/api/plan"); if (r.plan.length) renderPlan(r.plan); } catch { /* offline */ }
+}, 4000);
 
 // ------------------------------------------------------------ teammate lap files
 const tm = { upload: null };
@@ -878,7 +910,7 @@ async function loadSettings() {
   $("#s-extra").value = (c.extra_drivers || []).join(", ");
   $("#s-overlay").value = c.overlay_mode || "practice";
   $("#s-opacity").value = c.overlay_opacity || 0.85;
-  $("#s-voice").value = c.voice_mode || "cues";
+  $("#s-voice").value = c.voice_mode || "full";
   $("#s-update").value = c.update_mode || "auto";
   $("#s-lan").checked = !!c.lan_access;
   refreshLan();

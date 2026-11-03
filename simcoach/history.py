@@ -16,6 +16,7 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 
+from . import drills
 from .analysis import ISSUE_LABELS, SHORT_CUES
 from .config import app_dir
 
@@ -53,7 +54,7 @@ def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict)
         "laps": laps[-MAX_LAPS:],
         "lap_count": len(laps), "valid_laps": len(valid),
         "best": min((l["lap_time"] for l in valid), default=None),
-        "report": {"corners": [{k: c.get(k) for k in ("name", "title", "avg_loss", "best_loss", "spread",
+        "report": {"corners": [{k: c.get(k) for k in ("index", "name", "title", "avg_loss", "best_loss", "spread",
                                                        "main_issue", "main_issue_code", "main_issue_laps", "laps")}
                                for c in report.get("corners", [])],
                    "summary": report.get("summary", []), "focus": report.get("focus", [])},
@@ -141,9 +142,14 @@ def practice_plan(report: dict, grades: dict | None = None, minutes: int = 45) -
         cue = SHORT_CUES.get(code, "")
         label = ISSUE_LABELS.get(code, c.get("main_issue") or "losing time")
         target = max(0.05, round((c["avg_loss"] - (c.get("best_loss") or 0)) / 2 + (c.get("best_loss") or 0), 2))
-        plan.append({"title": f"Corner drill: {c.get('title') or c.get('name')}", "minutes": 12,
-                     "detail": f"{label} (avg {c['avg_loss']:+.2f}s). Focus: {cue}. Start the Corner drill on this "
-                               f"corner; goal: within {target:.2f}s of the reference 3 laps in a row."})
+        kind = drills.drill_for(code)
+        d = drills.DRILLS[kind]
+        step = {"title": f"{d['title']} drill: {c.get('title') or c.get('name')}", "minutes": 12,
+                "detail": f"{label} (avg {c['avg_loss']:+.2f}s). Focus: {cue}. {d['how']}"
+                          + (f" Goal: within {target:.2f}s of the reference 3 laps in a row." if kind == "time" else "")}
+        if c.get("index") is not None:
+            step["drill"] = {"corner": c["index"], "kind": kind, "target": target}
+        plan.append(step)
     if grades:
         scored = [(k, v) for k, v in grades.items() if k in GRADES and v is not None]
         if scored:
@@ -157,7 +163,7 @@ def practice_plan(report: dict, grades: dict | None = None, minutes: int = 45) -
         plan.append({"title": "Consistency run", "minutes": 8,
                      "detail": "5 consecutive laps at 99 % - aim for every lap within ±0.3 s. "
                                "Consistency first, then speed."})
-    plan.append({"title": "Push laps", "minutes": 5,
+    plan.append({"title": "Push laps", "minutes": 5, "action": "optimal",
                  "detail": "3 flying laps against your optimal lap (Laps → Build my optimal lap). "
                            "Put the drills together."})
     used = sum(p["minutes"] for p in plan)

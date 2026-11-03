@@ -278,14 +278,44 @@ def test_drill_completes_and_moves_on():
     c = SessionCoach(VoiceCoach(native=False))
     comp = {"gap": 0.5, "scores": {}, "corners": [
         {"name": "C1", "time_lost": 0.3, "issues": ["brake_early"]},
-        {"name": "C2", "time_lost": 0.2, "issues": ["late_throttle"]}]}
+        {"name": "C2", "time_lost": 0.2, "issues": ["coasting_unknown"]}]}
     c.add_lap(1, 90.0, True, comp)
     c.start_focus(None)
-    assert c.focus.name == "C1"
+    assert c.focus.name == "C1" and c.focus.kind == "brake_ladder"      # braking too early -> ladder
+    # ladder: start at -20 m, then 5 m later each lap until the reference, then hold it twice
+    for bp in (-20, -15, -10, -5, 0, 0, 0):
+        c.on_corner(0, {"name": "C1", "time_lost": 0.05, "issues": [], "brake_point_m": bp,
+                        "min_speed_diff_kmh": 0.0})
+        if "C1" in c.focus.completed:
+            break
+    assert "C1" in c.focus.completed and c.focus.name == "C2" and c.focus.kind == "time"
     for _ in range(3):
-        c.on_corner(0, {"name": "C1", "time_lost": 0.01, "issues": []})
-    assert "C1" in c.focus.completed and c.focus.name == "C2"
+        c.on_corner(1, {"name": "C2", "time_lost": 0.01, "issues": []})
+    assert "C2" in c.focus.completed
 
+
+def test_drill_library_evaluations():
+    from simcoach.drills import drill_for, evaluate
+    assert drill_for("no_trail") == "trail_brake" and drill_for("turn_in_late") == "turn_in"
+    assert drill_for("low_min_speed") == "min_speed" and drill_for("wheelspin") == "throttle"
+    assert drill_for("whatever") == "time"
+    assert evaluate("trail_brake", {"trail_m_diff": -3}, {}, 0.05)["ok"]
+    r = evaluate("trail_brake", {"trail_m_diff": -20}, {}, 0.05)
+    assert not r["ok"] and r["say"] == "Trail the brake deeper"
+    assert evaluate("turn_in", {"turn_in_m": 12}, {}, 0.05)["say"] == "Turn in earlier"
+    assert evaluate("throttle", {"throttle_point_m": 0, "wheelspin_m_diff": 10}, {}, 0.05)["say"] == \
+        "Smoother on the throttle"
+    st = {}
+    for t in (0.20, 0.25, 0.22):
+        r = evaluate("consistency", {"time_lost": t}, st, 0.05)
+    assert r["done"]
+    # ladder overshoot locks the last good point
+    st = {}
+    evaluate("brake_ladder", {"brake_point_m": -20, "time_lost": 0.2}, st, 0.05)
+    evaluate("brake_ladder", {"brake_point_m": -15, "time_lost": 0.15}, st, 0.05)
+    r = evaluate("brake_ladder", {"brake_point_m": -10, "time_lost": 0.4, "min_speed_diff_kmh": -6}, st, 0.05)
+    assert st["locked"] == -15 and "Back off" in r["say"]
+    assert evaluate("brake_ladder", {"brake_point_m": -14, "time_lost": 0.12}, st, 0.05)["ok"]
 
 def test_no_memory_growth_over_long_session():
     """Simulate a long stint; memory after warm-up must stay flat."""
@@ -333,7 +363,7 @@ def test_no_memory_growth_over_long_session():
     # Bounded: memory may differ by one retained lap (~105 KB: "last lap" and "session best" are
     # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
     assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
-    assert len(eng.events) <= 30 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
+    assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
 
 
 # ------------------------------------------------------------------ v4: auto-update
@@ -696,7 +726,7 @@ def test_live_race_fuel_save_and_history(tmp_path):
     prog = client.get("/api/progress", params={"track": "Demo Ring - GP"}).json()
     assert prog["sessions"] and prog["sessions"][-1]["best"]
     pp = client.get("/api/practice_plan").json()
-    assert pp["plan"] and any("Corner drill" in p["title"] for p in pp["plan"])
+    assert pp["plan"] and any(p.get("drill") and "drill" in p["title"] for p in pp["plan"])
     assert sum(p["minutes"] for p in pp["plan"]) == 45
     # optimal lap from the recorded laps
     o = client.post("/api/optimal", json={"set_reference": True}).json()
@@ -811,3 +841,63 @@ def test_lan_guard_qr_and_status():
     svg = local.get("/api/lan/qr.svg", params={"url": "http://192.168.1.20:8061/"})
     assert svg.status_code == 200 and svg.headers["content-type"].startswith("image/svg") and "<svg" in svg.text
     assert local.get("/api/lan/qr.svg", params={"url": "javascript:alert(1)"}).status_code == 400
+
+
+# --------------------------------------------- v10: vocal coach, drills from plan, session report
+def test_vocal_coach_calls_braking_turn_in_and_trail():
+    cfg = Config(record_laps=False, voice_mode="full")
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    _drive(eng, 2.6)
+    kinds = {e["kind"] for e in eng.events}
+    assert {"brake", "turn_in", "trail", "brake_pressure"} <= kinds
+    trail_c3 = [e for e in eng.events if e["corner"] == "C3" and e["kind"] == "trail"]
+    assert trail_c3 and trail_c3[-1]["severity"] == "bad"                 # planted: off the brake early
+    spoken = [v["text"] for v in eng.coach.voice.log] + [e["text"] for e in eng.events]
+    said = " | ".join(v["text"] for v in eng.coach.voice.log)
+    assert "Brake later" in said or "Trail the brake deeper" in said or "Turn in earlier" in said, said
+    assert spoken
+    # quiet mode doesn't call phases
+    eng2 = LiveEngine(Config(record_laps=False, voice_mode="cues"), DemoSource())
+    eng2.set_reference(demo.reference_lap())
+    _drive(eng2, 1.4)
+    assert not any(t in v["text"] for v in eng2.coach.voice.log for t in ("Brake later", "Trail the brake", "Turn in"))
+
+
+def test_voice_setting_migrates_to_full(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    (tmp_path / "config.json").write_text(_json.dumps({"voice_mode": "cues"}))
+    assert Config.load().voice_mode == "full"
+    (tmp_path / "config.json").write_text(_json.dumps({"voice_mode": "off"}))
+    assert Config.load().voice_mode == "off"                               # an explicit "off" is respected
+    (tmp_path / "config.json").write_text(_json.dumps({"voice_mode": "cues", "voice_v2": True}))
+    assert Config.load().voice_mode == "cues"                              # chosen after the change: kept
+
+
+def test_plan_starts_drills_and_ticks_off(tmp_path):
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    _drive(eng, 3.6)
+    plan = client.get("/api/practice_plan", params={"minutes": 45}).json()["plan"]
+    drills_ = [i for i, p in enumerate(plan) if p.get("drill")]
+    assert drills_ and all(p["status"] == "pending" for p in plan)
+    i = drills_[0]
+    r = client.post(f"/api/plan/{i}/start").json()
+    assert r["plan"][i]["status"] == "active" and r["focus"]["active"]
+    assert r["focus"]["corner"] == plan[i]["drill"]["corner"] and r["focus"]["kind"] == plan[i]["drill"]["kind"]
+    # completing the drill ticks the step off
+    eng.coach._plan_step_done(plan[i]["drill"]["corner"], plan[i]["drill"]["kind"])
+    assert client.get("/api/plan").json()["plan"][i]["status"] == "done"
+    assert client.post("/api/plan/99/start").status_code == 404
+    # printable report
+    assert client.get("/report").status_code == 200
+    rep = client.get("/api/report").json()
+    assert rep["report"]["laps"] >= 2 and rep["top"] and rep["plan"] and rep["grades"]
+    t = rep["top"][0]
+    assert t["trace"] and len(t["trace"]["me_speed"]) == len(t["trace"]["ref_speed"]) > 20
+    assert t["last_lap"]["tips"]

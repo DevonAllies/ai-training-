@@ -107,7 +107,9 @@ function render(st) {
     const f = st.focus || {};
     if (f.active && f.name) {
       const dots = Array.from({ length: f.needed }, (_, i) => i < f.streak ? "●" : "○").join(" ");
-      $("cuetext").innerHTML = `<span class="warn">DRILL ${esc(f.name)}</span> &nbsp;${dots}` +
+      const lt = f.ladder_locked ?? f.ladder_target;
+      $("cuetext").innerHTML = `<span class="warn">${esc(f.name)} · ${esc(f.drill || "DRILL")}</span> &nbsp;${dots}` +
+        (f.kind === "brake_ladder" && lt != null ? ` &nbsp;<span class="lbl">brake at ${lt > 0 ? "+" : ""}${Math.round(lt)} m</span>` : "") +
         (f.last_loss != null ? ` &nbsp;<span class="lbl">last ${fmtD(f.last_loss)}s</span>` : "");
     } else $("cuetext").textContent = st.next_corner ? "Next: " + st.next_corner : "";
   }

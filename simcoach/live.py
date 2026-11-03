@@ -304,6 +304,15 @@ class RefCorner:
     throttle: int | None
     steer_thr: float | None
     win: int
+    trail_m: float | None = None       # metres the reference brakes while turned in (to the apex)
+    peak_brake: float | None = None    # reference peak brake pressure in the braking zone
+
+
+def _trail_m(brake, steer, start: int | None, apex: int, thr: float | None, bin_m: float) -> float | None:
+    if start is None or thr is None or steer is None:
+        return None
+    seg = slice(start, apex + 1)
+    return float(np.sum((brake[seg] > 0.05) & (np.abs(steer[seg]) > thr))) * bin_m
 
 
 def build_ref_corners(ref: Lap, corners: list[Corner]) -> list[RefCorner]:
@@ -314,10 +323,13 @@ def build_ref_corners(ref: Lap, corners: list[Corner]) -> list[RefCorner]:
         lo, hi = max(a, m - w), min(b, m + w)
         apex = lo + int(np.argmin(ref.speed[lo:hi + 1]))
         thr = steer_threshold(ref, a, b)
+        bb = _brake_on(ref.brake, a, m)
+        bin_m = (ref.track_length or 4000.0) / N_BINS
         out.append(RefCorner(
-            corner=c, brake=_brake_on(ref.brake, a, m), turn_in=turn_in_bin(ref, a, apex, thr),
+            corner=c, brake=bb, turn_in=turn_in_bin(ref, a, apex, thr),
             apex=apex, min_speed=float(ref.speed[apex]), throttle=_throttle_on(ref.throttle, apex, b),
-            steer_thr=thr, win=w,
+            steer_thr=thr, win=w, trail_m=_trail_m(ref.brake, ref.steer, bb, apex, thr, bin_m),
+            peak_brake=float(np.max(ref.brake[a:apex + 1])) if bb is not None else None,
         ))
     return out
 
@@ -354,7 +366,42 @@ def classify(kind: str, value: float, units: str = "metric") -> tuple[str, str]:
         if value < -8:
             return f"Throttle {d(value)} early", "good"
         return "Throttle on time", "good"
+    if kind == "trail":                      # metres of trail braking vs the reference
+        if value < -15:
+            return f"Trail braking {d(value)} short - stay on the brake into the turn", "bad"
+        if value > 20:
+            return f"Trailing {d(value)} longer than reference", "warn"
+        return "Trail braking good", "good"
+    if kind == "brake_pressure":             # peak brake difference, fraction (0..1)
+        if value < -0.12:
+            return f"Brake pressure {abs(value) * 100:.0f}% low - brake harder", "bad"
+        if value > 0.12:
+            return f"Brake pressure {value * 100:.0f}% high", "warn"
+        return "Brake pressure good", "good"
     return kind, "ok"
+
+
+def spoken_call(kind: str, value: float, sev: str, units: str = "metric") -> str | None:
+    """Very short phrase for the voice coach (spoken while driving, so a few words only)."""
+    def d(m):
+        n = round(abs(m) / 5) * 5 or round(abs(m))
+        return f"{n} metres" if units == "metric" else f"{round(abs(m) * 3.281 / 10) * 10} feet"
+    if sev == "good":
+        return {"brake": "Good brake point", "turn_in": "Good turn in", "trail": "Good trail",
+                "brake_pressure": "Good pressure", "min_speed": "Good speed", "throttle": "Good exit"}.get(kind)
+    if kind == "brake":
+        return f"Brake later, {d(value)}" if value < 0 else f"Braked {d(value)} later"
+    if kind == "turn_in":
+        return "Turn in earlier" if value > 0 else "Turn in later"
+    if kind == "trail":
+        return "Trail the brake deeper" if value < 0 else "Release the brake sooner"
+    if kind == "brake_pressure":
+        return "Brake harder" if value < 0 else "Less brake pressure"
+    if kind == "min_speed":
+        return "Carry more speed"
+    if kind == "throttle":
+        return "Throttle earlier"
+    return None
 
 
 # ------------------------------------------------------------------ engine
@@ -381,6 +428,7 @@ class LiveEngine:
         self.events: list[dict] = []            # phase events (brake/turn-in/min speed/throttle)
         self._reported: set[tuple[int, str]] = set()
         self._my_apex: dict[int, int] = {}
+        self._last_sev: dict[tuple[int, str], str] = {}   # last lap's result per corner/phase (voice)
         self.last_lap: Lap | None = None
         self.last_comparison: dict | None = None
         self.session_best: Lap | None = None
@@ -631,7 +679,29 @@ class LiveEngine:
                             "kind": kind, "value": round(value, 1),
                             "text": text, "severity": sev,
                             "t": self.last_sample["session_time"] if self.last_sample else 0.0})
-        self.events = self.events[-30:]
+        self.events = self.events[-60:]
+        self._speak_event(idx, rc, kind, value, sev)
+
+    # Which phases the voice calls out in "full" mode (braking, turning, trail braking first).
+    VOICE_KINDS = ("brake", "brake_pressure", "turn_in", "trail", "min_speed", "throttle")
+
+    def _speak_event(self, idx: int, rc: RefCorner, kind: str, value: float, sev: str) -> None:
+        """Live voice calls for braking / turn-in / trail braking as they happen."""
+        mode = self.config.voice_mode
+        if mode not in ("full", "detailed") or kind not in self.VOICE_KINDS:
+            return
+        f = self.coach.focus
+        if f.active and f.corner is not None and f.corner != idx:
+            return                                   # drilling another corner: stay quiet here
+        prev = self._last_sev.get((idx, kind))
+        self._last_sev[(idx, kind)] = sev
+        if sev == "good" and prev not in ("bad", "warn"):
+            return                                   # only praise a fixed mistake, not every good corner
+        if mode == "detailed" and kind not in ("brake", "turn_in", "trail"):
+            return
+        phrase = spoken_call(kind, value, sev, self.config.units)
+        if phrase:
+            self.coach._say(phrase, important=(sev == "bad"))
 
     def _check_phases(self, s: dict) -> None:
         """Report brake / turn-in / min-speed / throttle differences as they happen."""
@@ -659,6 +729,15 @@ class LiveEngine:
             if cur >= hi and (idx, "min_speed") not in self._reported and buf.filled[lo:hi + 1].all():
                 seg = data["speed"][lo:hi + 1]
                 self._my_apex[idx] = lo + int(np.argmin(seg))
+                my_apex = self._my_apex[idx]
+                # braking phase is over at the apex: brake pressure and trail braking
+                mb = _brake_on(data["brake"], a, my_apex)
+                if rc.peak_brake is not None and mb is not None:
+                    self._event(idx, rc, "brake_pressure", float(np.max(data["brake"][a:my_apex + 1])) - rc.peak_brake)
+                if rc.trail_m is not None and mb is not None:
+                    mine = _trail_m(data["brake"], data["steer"], mb, my_apex, rc.steer_thr, bin_m)
+                    if mine is not None:
+                        self._event(idx, rc, "trail", mine - rc.trail_m)
                 self._event(idx, rc, "min_speed", (float(seg.min()) - rc.min_speed) * MS_TO_KMH)
             if rc.throttle is not None and idx in self._my_apex and (idx, "throttle") not in self._reported:
                 mt = _throttle_on(data["throttle"], self._my_apex[idx], min(cur, b))

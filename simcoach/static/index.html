@@ -96,18 +96,24 @@
     </div>
 
     <div class="card">
-      <div class="label">Corner drill – master one corner at a time</div>
+      <div class="label">Drills – targeted practice, one corner at a time</div>
       <div id="drill" class="drill"><span class="muted">Off. The coach picks the corner where you lose most and
         moves on once you're on target 3 laps in a row.</span></div>
       <div class="actions">
         <button id="drill-auto" class="primary small">Start (coach picks)</button>
         <select id="drill-corner" class="small"><option value="">or choose corner…</option></select>
+        <select id="drill-kind" class="small">
+          <option value="">drill: coach picks</option><option value="brake_ladder">Brake-point ladder</option>
+          <option value="trail_brake">Trail braking</option><option value="turn_in">Turn-in point</option>
+          <option value="min_speed">Minimum speed</option><option value="throttle">Throttle pick-up</option>
+          <option value="consistency">Consistency</option><option value="time">Match the reference</option></select>
         <button id="drill-stop" class="small">Stop</button>
       </div>
     </div>
 
     <div class="card wide">
-      <div class="label">Session report <span class="muted">(all laps this session)</span></div>
+      <div class="label">Session report <span class="muted">(all laps this session)</span>
+        <a href="/report" target="_blank" style="float:right"><button class="small primary">Printable report / PDF</button></a></div>
       <div id="report"><span class="muted">Appears after your first complete lap.</span></div>
     </div>
 
@@ -305,6 +311,7 @@
       <label>Car / track <select id="pg-combo"></select></label>
       <label>Session length <select id="pg-min"><option>30</option><option selected>45</option><option>60</option><option>90</option></select> min</label>
       <button id="pg-plan" class="primary">Make my practice plan</button>
+      <a href="/report" target="_blank"><button>Printable report / PDF</button></a>
     </div>
   </div>
   <div class="analyze-grid">
@@ -394,8 +401,9 @@
       not a running commentary. Uses Windows text-to-speech; the browser overlay can also speak
       (<a href="/overlay?voice=1" target="_blank">/overlay?voice=1</a>).</p>
     <label class="block">Voice
-      <select id="s-voice"><option value="cues">Cues before corners</option>
-        <option value="detailed">Cues + time lost/gained after corners</option><option value="off">Off</option></select></label>
+      <select id="s-voice"><option value="full">Full coach – braking, turn-in, trail braking, pressure, apex speed, throttle</option>
+        <option value="detailed">Braking, turn-in &amp; trail braking calls</option>
+        <option value="cues">Quiet – one reminder before each corner</option><option value="off">Off</option></select></label>
     <label class="check"><input id="s-voice-native" type="checkbox"> Speak through this PC (Windows voice)</label>
     <label class="check"><input id="s-voice-practice" type="checkbox"> Only in practice / testing sessions</label>
     <label class="block">Corner drill target (seconds within reference)

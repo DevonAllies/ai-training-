@@ -51,8 +51,10 @@ class Config:
     overlay_y: int = 60
     overlay_scale: float = 1.0
     overlay_opacity: float = 0.85
-    # Voice coach: "off", "cues" (one short reminder before a corner) or "detailed"
-    voice_mode: str = "cues"
+    # Voice coach: "off", "cues" (one reminder before a corner), "detailed" (+ braking/turn-in/trail
+    # calls) or "full" (+ brake pressure, apex speed and throttle calls)
+    voice_mode: str = "full"
+    voice_v2: bool = False             # one-time move of old "cues" setups to the more vocal coach
     voice_native: bool = True          # speak through Windows text-to-speech
     voice_practice_only: bool = True
     # Corner drill: a corner counts as "on target" within this many seconds of the reference
@@ -81,6 +83,10 @@ class Config:
                 raw = {}
             known = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__}
             cfg = cls(**known)
+        if not cfg.voice_v2:                       # v0.7: the coach became more vocal by default
+            if cfg.voice_mode == "cues":
+                cfg.voice_mode = "full"
+            cfg.voice_v2 = True
         env_token = os.environ.get("GARAGE61_TOKEN")
         if env_token and not cfg.garage61_token:
             cfg.garage61_token = env_token
