@@ -111,6 +111,9 @@ function render(st) {
       $("cuetext").innerHTML = `<span class="warn">${esc(f.name)} · ${esc(f.drill || "DRILL")}</span> &nbsp;${dots}` +
         (f.kind === "brake_ladder" && lt != null ? ` &nbsp;<span class="lbl">brake at ${lt > 0 ? "+" : ""}${Math.round(lt)} m</span>` : "") +
         (f.last_loss != null ? ` &nbsp;<span class="lbl">last ${fmtD(f.last_loss)}s</span>` : "");
+    } else if (st.consistency) {
+      const cs = st.consistency;
+      $("cuetext").innerHTML = `<span class="${cs.streak ? "good" : "warn"}">CONSISTENCY ${cs.streak}/${cs.goal}</span> &nbsp;<span class="lbl">${cs.target ? fmtT(cs.target) + " ±" + cs.window.toFixed(1) : "setting target…"}</span>`;
     } else $("cuetext").textContent = st.next_corner ? "Next: " + st.next_corner : "";
   }
   voice(st.voice);

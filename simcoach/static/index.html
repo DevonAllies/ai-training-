@@ -14,8 +14,8 @@
     <button class="tab active" data-tab="live">Live</button>
     <button class="tab" data-tab="laps">Laps</button>
     <button class="tab" data-tab="analyze">Analyse</button>
-    <button class="tab" data-tab="race">Race</button>
-    <button class="tab" data-tab="progress">Progress</button>
+    <button class="tab" data-tab="race" data-feature="endurance">Race</button>
+    <button class="tab" data-tab="progress" data-feature="practice">Progress</button>
     <button class="tab" data-tab="sessions">Sessions</button>
     <button class="tab" data-tab="corners">Corners</button>
     <button class="tab" data-tab="settings">Settings</button>
@@ -74,14 +74,14 @@
       <canvas id="live-chart" height="260"></canvas>
     </div>
 
-    <div class="card wide">
+    <div class="card wide" data-feature="sectors">
       <div class="label">Sectors this lap <span id="sector-target" class="muted"></span>
         <a href="/overlay" target="_blank" class="muted small-text" style="float:right">open browser overlay ↗</a></div>
       <div id="live-sectors" class="sector-chips"><span class="muted">Sector times appear after the first sector.</span></div>
     </div>
 
-    <div class="card">
-      <div class="label">Live corner feedback (brake · turn-in · min speed · throttle)</div>
+    <div class="card" data-feature="live_feedback">
+      <div class="label">Live corner feedback (brake · turn-in · trail · pressure · min speed · throttle)</div>
       <ul id="events" class="callouts"><li class="muted">Drive through a corner to see feedback.</li></ul>
     </div>
 
@@ -95,7 +95,23 @@
       <div id="grades" class="grades"><span class="muted">Complete a lap against a reference to get graded.</span></div>
     </div>
 
-    <div class="card">
+    <div class="card wide" data-feature="consistency">
+      <div class="label">Consistency trainer – the same lap, every lap</div>
+      <div class="analyze-grid">
+        <div>
+          <div class="filters">
+            <label>Target lap <input id="ct-target" type="text" placeholder="auto" style="width:90px"></label>
+            <label>Window <select id="ct-window"><option value="0.2">±0.2 s</option><option value="0.3" selected>±0.3 s</option><option value="0.5">±0.5 s</option><option value="1">±1.0 s</option></select></label>
+            <label>Goal <select id="ct-goal"><option>5</option><option selected>10</option><option>15</option><option>20</option></select> laps in a row</label>
+            <button id="ct-start" class="primary small">Start</button><button id="ct-stop" class="small">Stop</button>
+          </div>
+          <div id="ct-status"><span class="muted">Off. Leave the target empty and the trainer sets it from your pace after 3 laps.</span></div>
+        </div>
+        <div><div class="label">Where you're inconsistent <span class="muted">(red = varies more than your typical corner, green = steadier)</span></div><canvas id="ct-map" height="220"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card" data-feature="drills">
       <div class="label">Drills – targeted practice, one corner at a time</div>
       <div id="drill" class="drill"><span class="muted">Off. The coach picks the corner where you lose most and
         moves on once you're on target 3 laps in a row.</span></div>
@@ -409,6 +425,9 @@
     <label class="block">Corner drill target (seconds within reference)
       <input id="s-focus-target" type="text" inputmode="decimal"></label>
     <div class="actions"><button id="btn-voice-test" class="small">Test voice</button></div>
+    <h3>Training features</h3>
+    <p class="muted">Switch off what you don't want – it disappears from the dashboard, overlay and voice.</p>
+    <div id="s-features"></div>
     <h3>Tablet / phone</h3>
     <p class="muted">Use a tablet or phone next to your rig as a second screen. It must be on the same home Wi-Fi.
       Devices on your network can use the coaching screens but can't change settings or delete anything.</p>

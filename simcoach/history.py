@@ -47,7 +47,8 @@ def new_session_id(track: str, car: str) -> str:
     return f"{datetime.now():%Y%m%d_%H%M%S}_{slug}"
 
 
-def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict) -> None:
+def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict,
+                 consistency: dict | None = None) -> None:
     valid = [l for l in laps if l.get("valid")]
     data = {
         "id": sid, "date": sid[:15], "track": track, "car": car,
@@ -65,6 +66,8 @@ def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict)
             if v is not None:
                 grades[k].append(v)
     data["grades"] = {k: round(statistics.fmean(v)) for k, v in grades.items()}
+    if consistency and consistency.get("score") is not None:
+        data["consistency"] = {k: consistency.get(k) for k in ("score", "best_streak", "window", "target", "stdev")}
     fuel = [l["fuel_used"] for l in valid if l.get("fuel_used")]
     data["fuel_per_lap"] = round(statistics.fmean(fuel), 3) if fuel else None
     (history_dir() / f"{sid}.json").write_text(json.dumps(data, indent=1), encoding="utf-8")
@@ -106,6 +109,7 @@ def progress(track: str, car: str = "") -> dict:
         pb = s["best"] if pb is None or (s["best"] and s["best"] < pb) else pb
         out["sessions"].append({"id": s["id"], "date": s["date"], "best": s["best"], "laps": s["valid_laps"],
                                 "grades": s.get("grades", {}), "fuel_per_lap": s.get("fuel_per_lap"),
+                                "consistency": s.get("consistency"),
                                 "pb_so_far": pb})
     out["pb"] = pb
     # problems that keep coming back: (corner, issue) in a session's top 3, in >= 2 sessions
@@ -160,9 +164,9 @@ def practice_plan(report: dict, grades: dict | None = None, minutes: int = 45) -
                                        f"every corner for 5 laps; check the grade after each lap."})
     spreads = [c.get("spread") or 0 for c in report.get("corners", [])]
     if spreads and max(spreads) > 0.1:
-        plan.append({"title": "Consistency run", "minutes": 8,
-                     "detail": "5 consecutive laps at 99 % - aim for every lap within ±0.3 s. "
-                               "Consistency first, then speed."})
+        plan.append({"title": "Consistency run", "minutes": 8, "consistency": {"window": 0.3, "goal": 5},
+                     "detail": "5 consecutive laps at 99 % - every lap within ±0.3 s of the target. "
+                               "Starts the Consistency trainer; consistency first, then speed."})
     plan.append({"title": "Push laps", "minutes": 5, "action": "optimal",
                  "detail": "3 flying laps against your optimal lap (Laps → Build my optimal lap). "
                            "Put the drills together."})

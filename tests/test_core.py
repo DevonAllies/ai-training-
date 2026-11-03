@@ -901,3 +901,52 @@ def test_plan_starts_drills_and_ticks_off(tmp_path):
     t = rep["top"][0]
     assert t["trace"] and len(t["trace"]["me_speed"]) == len(t["trace"]["ref_speed"]) > 20
     assert t["last_lap"]["tips"]
+
+
+# ------------------------------------------------- v11: consistency trainer, feature switches
+def test_consistency_trainer_window_streak_and_why():
+    from simcoach.consistency import ConsistencyTrainer
+    ct = ConsistencyTrainer()
+    ct.start(None, 0.3, 4)
+    def corners(c3_loss, bp=-5.0):
+        return [{"name": "C1", "time_lost": 0.1, "brake_point_m": 0.0},
+                {"name": "C3", "title": "T3", "spoken": "T3", "time_lost": c3_loss, "brake_point_m": bp}]
+    for t in (90.0, 90.2, 90.1):                       # 3 laps set the target from your pace
+        ct.add_lap(t, True, corners(0.2))
+    assert ct.target == pytest.approx(90.1)
+    r = ct.add_lap(90.3, True, corners(0.2))
+    assert r["inside"] and ct.streak == 1
+    r = ct.add_lap(90.9, True, corners(0.75, bp=-18.0))  # out: T3 cost 0.55s, braked 13 m earlier
+    assert not r["inside"] and ct.streak == 0
+    assert r["why"]["corner"] == "T3" and r["why"]["cost"] == pytest.approx(0.55)
+    assert "braked 13 m earlier" in r["why"]["habit"]
+    assert "Outside" in ct.spoken(r) and "T3" in ct.spoken(r)
+    for t in (90.05, 90.15, 90.0, 90.2):
+        r = ct.add_lap(t, True, corners(0.2))
+    assert r["completed"] and ct.best_streak == 4 and ct.status()["score"] > 50
+    assert ct.add_lap(80.0, False, None) is None        # invalid laps don't count
+
+
+def test_feature_switches_hide_and_block():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    f = client.get("/api/features").json()
+    assert set(f["features"]) >= {"drills", "consistency", "endurance", "practice", "live_feedback", "brake_cue"}
+    client.post("/api/config", json={"features": {"consistency": False, "endurance": False, "drills": False,
+                                                  "live_feedback": False, "brake_cue": False}})
+    assert client.post("/api/consistency/start", json={}).status_code == 409
+    assert client.post("/api/fuelsave", json={"mode": "extra_lap"}).status_code == 409
+    assert client.post("/api/coach/focus", json={"action": "auto"}).status_code == 409
+    assert client.post("/api/fuelsave", json={"mode": "off"}).status_code == 200      # turning off always works
+    _drive(eng, 1.6)
+    assert not eng.events                                   # no live corner feedback
+    ov = eng.overlay()
+    assert ov["brake_cue"] is None and ov["fuel"] is None and ov["consistency"] is None
+    client.post("/api/config", json={"features": {"consistency": True, "live_feedback": True}})
+    assert client.post("/api/consistency/start", json={"window": 0.5, "goal": 5}).json()["active"]
+    _drive(eng, 1.2)
+    assert eng.events and eng.overlay()["consistency"]["goal"] == 5

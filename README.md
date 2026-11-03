@@ -169,6 +169,21 @@ Drills (Live tab) work on one corner. The coach picks the right drill for your m
 
 Every attempt is judged on that drill's own measure, logged on the drill card, shown on the overlay (including the brake-point target during the ladder) and called by voice.
 
+## Consistency trainer
+
+The Live tab's **Consistency trainer** is for race pace: the same lap, every lap.
+
+1. **Set it up.** Choose a window (for example ±0.3 s) and a goal (for example 10 laps in a row). Enter a target lap, or leave it empty and the trainer sets it from your pace after 3 laps.
+2. **Every lap** lands **inside** or **outside** the window. The overlay shows the streak, and the voice calls *"In the window, 7 in a row"* or *"Outside, plus 0.6. T3 cost 0.4"*.
+3. **When a lap falls out**, the trainer compares it with *your own usual lap*, not the reference, and names the corner and the habit that changed. For example: *"T3 cost 0.55 s – braked 13 m earlier than usual"*.
+4. **Results:** a consistency **score** (0–100), your best streak and lap-time spread. They're saved per session, so they appear in Progress.
+5. **The track map** shows where you're inconsistent: red is a corner that varies more than your typical corner, green is steadier.
+6. **From the plan:** the practice plan's *Consistency run* starts the trainer with one click and ticks itself off when you reach the goal.
+
+## Training features on/off
+
+**Settings → Training features** switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, and progress/practice plan. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
+
 ## Session report and practice plan
 
 - **Printable report** (Live tab → Session report, or Progress tab). One page with:
@@ -313,6 +328,7 @@ python -m pytest tests           # run tests
 | `simcoach/race.py` | Stints, fuel, endurance planner, lift-and-coast planner |
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/lan.py` | Tablet/phone access on the home network (QR code, settings guard) |
+| `simcoach/consistency.py` | Consistency trainer (window, streak, why a lap fell out, score) |
 | `simcoach/drills.py` | Drill library (brake ladder, trail braking, turn-in, apex speed, throttle, consistency) |
 | `simcoach/static/report.html` | Printable post-session report |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |

@@ -109,6 +109,8 @@ function onSnap(s) {
   renderSessionLaps(s.laps || []);
   renderGrades(s.scores);
   renderDrill(s.focus || {});
+  renderConsistency(s.consistency || {});
+  applyFeatures(s.features);
   const lapKey = (s.laps || []).length + ":" + ((s.laps || []).slice(-1)[0] || {}).lap_time;
   if (state.reportKey !== lapKey) { state.reportKey = lapKey; loadReport(); }
   fillDrillCorners();
@@ -485,6 +487,7 @@ function renderPlan(plan, note) {
   el.innerHTML = `<p class="muted small-text">${state.planSource ? "Based on " + esc(state.planSource) + " · " : ""}${done}/${plan.length} done</p>` +
     plan.map((p, i) => `<div class="plan-step ${p.status || ""}"><b>${p.status === "done" ? "✓ " : ""}${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}
       <div class="actions">${p.drill ? `<button class="small primary" data-start="${i}">${p.status === "active" ? "Restart drill" : "Start drill"}</button>` : ""}
+        ${p.consistency ? `<button class="small primary" data-start="${i}">${p.status === "active" ? "Restart" : "Start consistency run"}</button>` : ""}
         ${p.action === "optimal" ? `<button class="small primary" data-optimal="${i}">Build optimal lap &amp; use it</button>` : ""}
         ${p.status !== "done" ? `<button class="small" data-done="${i}">Mark done</button>` : ""}</div></div>`).join("");
 }
@@ -494,7 +497,8 @@ $("#pg-plan-out").addEventListener("click", async (ev) => {
     if (b.dataset.start !== undefined) {
       const r = await api(`/api/plan/${b.dataset.start}/start`, { method: "POST" });
       renderPlan(r.plan); msg($("#s-msg"), "");
-      alert(`Drill started: ${r.focus.drill} on ${r.focus.title}. Head out – the overlay and voice will coach this corner.`);
+      alert(r.step.consistency ? "Consistency run started – the target is set from your pace after 3 laps. Watch the streak on the overlay."
+        : `Drill started: ${r.focus.drill} on ${r.focus.title}. Head out – the overlay and voice will coach this corner.`);
     } else if (b.dataset.optimal !== undefined) {
       await api("/api/optimal", { method: "POST", body: { include_teammates: true, set_reference: true } });
       const r = await api(`/api/plan/${b.dataset.optimal}/start`, { method: "POST" }); renderPlan(r.plan);
@@ -913,6 +917,7 @@ async function loadSettings() {
   $("#s-voice").value = c.voice_mode || "full";
   $("#s-update").value = c.update_mode || "auto";
   $("#s-lan").checked = !!c.lan_access;
+  loadFeatureToggles();
   refreshLan();
   refreshUpdate();
   $("#s-autostart").checked = !!c.start_with_windows;
@@ -980,6 +985,66 @@ $("#btn-restart").addEventListener("click", async () => {
   }
   msg($("#s-msg"), "Couldn't restart automatically – quit SimCoach from the tray and start it again.", "err");
 });
+
+// ------------------------------------------------------------ training features on/off
+function applyFeatures(f) {
+  if (!f) return;
+  const key = JSON.stringify(f);
+  if (state.featKey === key) return;
+  state.featKey = key; state.features = f;
+  document.querySelectorAll("[data-feature]").forEach((el) => el.classList.toggle("feature-off", f[el.dataset.feature] === false));
+  const active = document.querySelector(".tab.active");
+  if (active && active.classList.contains("feature-off")) showTab("live");
+}
+async function loadFeatureToggles() {
+  const r = await api("/api/features").catch(() => null); if (!r) return;
+  $("#s-features").innerHTML = Object.entries(r.labels).map(([k, l]) =>
+    `<label class="check"><input type="checkbox" data-feat="${k}" ${r.features[k] !== false ? "checked" : ""}> ${esc(l)}</label>`).join("");
+}
+$("#s-features").addEventListener("change", async (e) => {
+  const k = e.target.dataset.feat; if (!k) return;
+  try { const c = await api("/api/config", { method: "POST", body: { features: { [k]: e.target.checked } } }); applyFeatures(c.features); }
+  catch (err) { msg($("#s-msg"), err.message, "err"); }
+});
+
+// ------------------------------------------------------------ consistency trainer
+function renderConsistency(c) {
+  const el = $("#ct-status");
+  const key = JSON.stringify(c);
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  if (!c.active) {
+    el.innerHTML = '<span class="muted">Off. Leave the target empty and the trainer sets it from your pace after 3 laps.</span>' +
+      (c.laps ? `<div class="muted small-text">Last run: ${c.inside}/${c.laps} laps inside, best streak ${c.best_streak}${c.score != null ? ", score " + c.score : ""}</div>` : "");
+    return;
+  }
+  el.innerHTML = `<div><span class="ct-big">${c.streak}</span><span class="muted"> / ${c.goal} in a row</span>
+      ${c.score != null ? `<span class="badge ${c.score >= 80 ? "good" : c.score >= 60 ? "warn" : "bad"}" style="margin-left:10px">score ${c.score}</span>` : ""}</div>
+    <div>${c.target ? `Target <b>${fmtTime(c.target)}</b> ±${c.window.toFixed(2)}s` : "Setting the target from your next laps…"}
+      · best streak ${c.best_streak} · ${c.inside}/${c.laps} inside${c.stdev != null ? ` · ±${c.stdev.toFixed(2)}s spread` : ""}</div>
+    <div style="margin-top:4px">${esc(c.message || "")}</div>
+    <ul class="ct-laps">${(c.recent || []).slice().reverse().map((l) => l.inside == null ? `<li class="muted">${fmtTime(l.lap_time)} (setting target)</li>` :
+      `<li><span class="sev ${l.inside ? "good" : "bad"}"></span>${fmtTime(l.lap_time)} <b class="${l.inside ? "neg" : "pos"}">${fmtDelta(l.delta)}</b> ${l.why ? "– " + esc(l.why) : ""}</li>`).join("")}</ul>`;
+  drawConsistencyMap();
+}
+async function drawConsistencyMap() {
+  const ref = state.ref; if (!ref || !ref.lat) return;
+  let r; try { r = await api("/api/coach/report"); } catch { return; }
+  if (!r.corners || !r.corners.length) return;
+  // colour relative to your typical corner: green = steadier than usual, red = varies more
+  const spreads = r.corners.map((c) => c.spread || 0).sort((x, y) => x - y);
+  const median = spreads[Math.floor(spreads.length / 2)] || 0;
+  const vals = new Array(ref.lat.length).fill(0);
+  r.corners.forEach((c) => { const k = state.refCorners[c.index]; if (!k) return; for (let i = k.start; i <= k.end; i++) vals[i] = (c.spread || 0) - median; });
+  Charts.trackMap($("#ct-map"), ref.lat, ref.lon, vals, { labels: state.refCorners.map((k) => ({ i: k.apex, text: k.name })) });
+}
+$("#ct-start").addEventListener("click", async () => {
+  const t = parseLapTime($("#ct-target").value);
+  if (Number.isNaN(t)) { alert("Target format: 1:29.500 (or leave empty)"); return; }
+  try { await api("/api/consistency/start", { method: "POST", body: { target: t, window: parseFloat($("#ct-window").value), goal: parseInt($("#ct-goal").value, 10) } }); }
+  catch (e) { alert(e.message); }
+});
+$("#ct-stop").addEventListener("click", () => api("/api/consistency/stop", { method: "POST" }));
 
 // ------------------------------------------------------------ demo mode
 $("#demo-exit").addEventListener("click", async () => {

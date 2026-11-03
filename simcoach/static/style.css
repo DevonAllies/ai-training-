@@ -145,3 +145,8 @@ details summary { cursor: pointer; margin-top: 8px; }
 .plan-step .actions { margin-top: 6px; }
 .drill-results { list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; }
 .drill-results li { padding: 2px 0; }
+
+.feature-off { display: none !important; }
+.ct-big { font: 700 34px Consolas, monospace; }
+.ct-laps { list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; }
+.ct-laps li { padding: 2px 0; }

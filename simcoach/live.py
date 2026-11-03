@@ -29,6 +29,7 @@ from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corne
                        detect_corners, steer_threshold, turn_in_bin)
 from . import history
 from .coach import SessionCoach
+from .consistency import ConsistencyTrainer
 from .race import RaceTracker, extra_lap_target, lift_plan
 from .config import Config, laps_dir
 from .corners import apply_names
@@ -435,6 +436,7 @@ class LiveEngine:
         self.laps_done: collections.deque[dict] = collections.deque(maxlen=200)
         self.lap_count = 0
         self.race = RaceTracker()
+        self.consistency = ConsistencyTrainer()
         self.fuel_save: dict | None = None        # active lift-and-coast plan
         self.history_id: str | None = None
         self.history_laps: collections.deque[dict] = collections.deque(maxlen=history.MAX_LAPS)
@@ -624,8 +626,10 @@ class LiveEngine:
             self.buf = LapBuffer(None)
         self.buf.add(s)
         if self.buf.start is not None:
-            self._check_sectors(prev, s)
-            self._check_phases(s)
+            if self.config.on("sectors"):
+                self._check_sectors(prev, s)
+            if self.config.on("live_feedback"):
+                self._check_phases(s)
             self._check_cues(s["pct"])
         self._check_corner(s["pct"])
 
@@ -755,7 +759,7 @@ class LiveEngine:
             if dist < -L / 2:
                 dist += L
             if 120 <= dist <= 350:
-                plan = (self.fuel_save or {}).get("plan") or []
+                plan = ((self.fuel_save or {}).get("plan") or []) if self.config.on("endurance") else []
                 lift = next((p for p in plan if p["index"] == idx), None)
                 if lift and idx not in self.coach._cued:      # fuel-save mode: lift cue replaces the tip
                     self.coach._cued.add(idx)
@@ -826,6 +830,17 @@ class LiveEngine:
             if self.config.record_laps:
                 info["file"] = self._save(lap, when)
         self.laps_done.append(info)
+        if self.config.on("consistency") and self.consistency.active:
+            res = self.consistency.add_lap(lap_time, buf.valid,
+                                           (self.last_comparison or {}).get("corners") if self.reference else None)
+            phrase = self.consistency.spoken(res) if res else None
+            if phrase:
+                self.coach._say(phrase, important=True)
+            if res and res.get("completed") and res.get("streak") == self.consistency.goal:
+                for p in self.coach.plan:              # tick off the plan's consistency run
+                    if p.get("consistency") and p["status"] == "active":
+                        p["status"] = "done"
+            info["consistency"] = None if not res else {"inside": res.get("inside"), "delta": res.get("delta")}
         self._record_history(info, lap)
 
     def _record_history(self, info: dict, lap: Lap) -> None:
@@ -836,8 +851,9 @@ class LiveEngine:
                 self.history_id = history.new_session_id(lap.meta.get("track", ""), lap.meta.get("car", ""))
             self.history_laps.append({k: info.get(k) for k in ("lap", "lap_time", "valid", "gap", "scores",
                                                                "fuel_used")})
+            cons = self.consistency.status() if self.consistency.laps else None
             history.save_session(self.history_id, lap.meta.get("track", ""), lap.meta.get("car", ""),
-                                 list(self.history_laps), self.coach.report())
+                                 list(self.history_laps), self.coach.report(), consistency=cons)
         except OSError:
             log.warning("could not write session history")
 
@@ -890,7 +906,7 @@ class LiveEngine:
         """Distance to the next reference braking point (only when it's close).
         In fuel-save mode the cue points at the lift-and-coast point instead."""
         L = self.track_length()
-        if self.fuel_save:
+        if self.fuel_save and self.config.on("endurance"):
             for p in self.fuel_save.get("plan", []):
                 dist = (GRID[p["lift_bin"]] - pct) * L
                 if dist < -L / 2:
@@ -900,6 +916,8 @@ class LiveEngine:
                     to_brake += L
                 if -40 <= dist <= 250 or (dist < 0 < to_brake):
                     return {"corner": p["corner"], "m": round(dist), "kind": "lift", "lift_m": p["lift_m"]}
+        if not self.config.on("brake_cue"):
+            return None
         for rc in self.ref_marks:
             if rc.brake is None:
                 continue
@@ -922,6 +940,8 @@ class LiveEngine:
                 "ref_lap_time": self.reference.lap_time if self.reference is not None else None,
                 "laps": list(self.laps_done)[-15:],
                 "focus": self.coach.focus.status(),
+                "consistency": self.consistency.status(),
+                "features": dict(self.config.features),
                 "scores": (self.last_comparison or {}).get("scores"),
                 "sector_target_label": self.sector_target_label or (
                     "session best" if self.current_sector_targets() else ""),
@@ -969,7 +989,7 @@ class LiveEngine:
         visible = on_track and (mode == "always" or (mode == "practice" and snap["is_practice"]))
         now = self.last_sample["session_time"] if self.last_sample else 0.0
         focus = snap.get("focus") or {}
-        evs = [e for e in snap.get("events", []) if now - e["t"] < 12.0]
+        evs = [e for e in snap.get("events", []) if now - e["t"] < 12.0] if self.config.on("live_feedback") else []
         if focus.get("active") and focus.get("name"):
             evs = [e for e in evs if e["corner"] == focus["name"]]
         recent = evs[-4:]
@@ -985,11 +1005,14 @@ class LiveEngine:
             "brake_cue": snap.get("brake_cue"),
             "next_corner": snap.get("next_corner"),
             "events": recent,
-            "sectors": snap.get("sectors", []),
-            "sector_count": len(self.sector_starts()),
+            "sectors": snap.get("sectors", []) if self.config.on("sectors") else [],
+            "sector_count": len(self.sector_starts()) if self.config.on("sectors") else 0,
             "units": self.config.units,
-            "focus": focus,
-            "fuel": self._fuel_overlay(),
+            "focus": focus if self.config.on("drills") else {},
+            "fuel": self._fuel_overlay() if self.config.on("endurance") else None,
+            "consistency": self.consistency.status() if (self.config.on("consistency")
+                                                         and self.consistency.active) else None,
+            "features": dict(self.config.features),
             "voice": self.coach.voice.recent(5),
             "voice_mode": self.config.voice_mode,
         }
