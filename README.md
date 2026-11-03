@@ -31,7 +31,7 @@ Windows SmartScreen may warn you because the installer isn't code-signed. Click 
 
 Also available:
 - **Portable zip** (`SimCoach-portable-x.y.z.zip`): unzip anywhere and run `SimCoach.exe`.
-- **Start Menu → SimCoach demo**: try everything without iRacing.
+- **Start Menu → SimCoach demo**: try everything without iRacing. To leave the demo, click **Exit demo & use iRacing** in the yellow banner, or just start the normal **SimCoach** shortcut, which closes the demo and starts live mode.
 
 ### Automatic updates
 

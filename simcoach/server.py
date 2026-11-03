@@ -71,7 +71,8 @@ class RefIn(BaseModel):
     lap: str                     # "g61:<id>", "local:<file>", "demo:ref" or "session_best"
 
 
-def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, updater=None) -> FastAPI:
+def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, updater=None,
+               on_quit=None, on_restart_live=None) -> FastAPI:
     app = FastAPI(title="SimCoach", version=__version__)
     state = {"g61": Garage61Client(config.garage61_token)}
     if engine.on_session_change is None:
@@ -143,6 +144,30 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     @app.get("/favicon.ico")
     def favicon():
         return FileResponse(STATIC / "icon.png")
+
+    def _local_only(request: Request):
+        host = request.client.host if request.client else ""
+        if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            raise HTTPException(403, "Only allowed from this PC")
+
+    @app.post("/api/quit")
+    def quit_app(request: Request):
+        _local_only(request)
+        if on_quit is None:
+            raise HTTPException(400, "Not available")
+        on_quit()
+        return {"ok": True}
+
+    @app.post("/api/exit_demo")
+    def exit_demo(request: Request):
+        """Leave demo mode: start SimCoach in live (iRacing) mode and close this instance."""
+        _local_only(request)
+        if not demo_mode:
+            return {"ok": True, "demo": False}
+        if on_restart_live is None:
+            raise HTTPException(400, "Not available")
+        on_restart_live()
+        return {"ok": True, "restarting": True}
 
     @app.get("/api/status")
     def status():

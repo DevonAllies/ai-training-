@@ -128,3 +128,4 @@ a { color: var(--accent); }
 .dropzone { border: 2px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center; }
 .dropzone.over { border-color: var(--accent); background: rgba(62,166,255,.08); }
 details summary { cursor: pointer; margin-top: 8px; }
+.update-banner.demo { background: rgba(245,184,61,.14); }

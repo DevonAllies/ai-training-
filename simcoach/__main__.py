@@ -40,12 +40,62 @@ def _setup_logging() -> Path:
     return path
 
 
-def _already_running(port: int) -> bool:
+def _running_instance(port: int) -> dict | None:
+    """Status of a SimCoach already running on this port, or None."""
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=0.7) as r:
-            return "version" in json.loads(r.read().decode())
+            d = json.loads(r.read().decode())
+            return d if "version" in d else None
     except Exception:
-        return False
+        return None
+
+
+def _already_running(port: int) -> bool:
+    return _running_instance(port) is not None
+
+
+def _ask_to_quit(port: int) -> None:
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/quit", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=2).close()
+    except Exception:
+        pass
+
+
+def _wait_port_free(port: int, timeout: float = 20.0) -> bool:
+    """Wait until the previous instance has released the port."""
+    import socket
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        if not _already_running(port):
+            with socket.socket() as s:
+                if sys.platform != "win32":      # match uvicorn: ignore sockets left in TIME_WAIT
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", port))
+                    return True
+                except OSError:
+                    pass
+        time.sleep(0.3)
+    return False
+
+
+def relaunch_command(port: int, demo: bool = False) -> list[str]:
+    """Command line that starts SimCoach again (installed exe or python -m simcoach)."""
+    base = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "simcoach"]
+    args = ["--takeover", "--no-browser", "--port", str(port)]
+    return base + args + (["--demo"] if demo else [])
+
+
+def spawn_detached(cmd: list[str]) -> None:
+    import subprocess
+    if sys.platform == "win32":
+        subprocess.Popen(cmd, creationflags=0x00000008 | 0x00000200, close_fds=True)
+    else:
+        subprocess.Popen(cmd, start_new_session=True, close_fds=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def import_sample_data() -> None:
@@ -84,6 +134,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-tray", action="store_true", help="Don't show the system-tray icon")
     ap.add_argument("--no-update", action="store_true", help="Don't check for updates")
     ap.add_argument("--updated", action="store_true", help=argparse.SUPPRESS)   # relaunch after update
+    ap.add_argument("--takeover", action="store_true", help=argparse.SUPPRESS)  # wait for the old instance to exit
     ap.add_argument("--import", dest="import_files", nargs="*", metavar="XLSX",
                     help="Import Garage 61 session export(s) and exit")
     ap.add_argument("--version", action="version", version=f"SimCoach {__version__}")
@@ -100,11 +151,21 @@ def main(argv: list[str] | None = None) -> None:
             print("Imported", f, "->", sessions.import_file(f))
         return
 
-    # Second launch (e.g. clicking the shortcut again) just opens the dashboard.
-    if _already_running(args.port):
+    running = None if args.takeover else _running_instance(args.port)
+    if running and running.get("demo") and not args.demo:
+        # The demo is running but the user started the real app: close the demo, start live mode.
+        log.info("Demo is running - closing it and starting live mode")
+        _ask_to_quit(args.port)
+        running = None
+        args.takeover = True
+    if running:
+        # Second launch (e.g. clicking the shortcut again) just opens the dashboard.
         log.info("SimCoach is already running - opening the dashboard")
         if not args.no_browser:
             webbrowser.open(url)
+        return
+    if args.takeover and not _wait_port_free(args.port):
+        log.error("Previous SimCoach did not exit in time - giving up")
         return
 
     import uvicorn
@@ -133,7 +194,12 @@ def main(argv: list[str] | None = None) -> None:
                       is_busy=lambda: bool(engine.connected and engine.last_sample
                                            and engine.last_sample.get("on_track")),
                       on_quit=quit_all)
-    app = create_app(engine, config, demo_mode=args.demo, updater=updater)
+    def restart_live():
+        spawn_detached(relaunch_command(args.port, demo=False))
+        threading.Timer(0.5, quit_all).start()
+
+    app = create_app(engine, config, demo_mode=args.demo, updater=updater,
+                     on_quit=lambda: threading.Timer(0.3, quit_all).start(), on_restart_live=restart_live)
     engine.on_session_change = auto_sector_targets
     engine.start()
     if not args.no_update and not args.demo:

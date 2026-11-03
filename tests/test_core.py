@@ -574,3 +574,24 @@ def test_teammate_upload_and_set_reference(tmp_path):
     assert client.post("/api/laps/upload", params={"filename": "g61.csv"}, content=csv).status_code == 422
     rc = client.post("/api/laps/upload", params={"filename": "g61.csv", "lap_time": 86.38}, content=csv)
     assert rc.status_code == 200 and abs(rc.json()["laps"][0]["lap_time"] - 86.38) < 0.01
+
+
+def test_exit_demo_and_quit_endpoints():
+    from fastapi.testclient import TestClient
+    from simcoach.__main__ import relaunch_command
+    from simcoach.server import create_app
+    calls = []
+    cfg = Config()
+    demo_app = create_app(LiveEngine(cfg, DemoSource()), cfg, demo_mode=True,
+                          on_quit=lambda: calls.append("quit"), on_restart_live=lambda: calls.append("live"))
+    c = TestClient(demo_app)
+    assert c.post("/api/exit_demo").json()["restarting"] is True
+    assert c.post("/api/quit").json()["ok"] and calls == ["live", "quit"]
+    live = TestClient(create_app(LiveEngine(cfg, DemoSource()), cfg, demo_mode=False,
+                                 on_restart_live=lambda: calls.append("x")))
+    assert live.post("/api/exit_demo").json()["demo"] is False and "x" not in calls
+    # requests from another machine on the network are refused
+    remote = TestClient(demo_app, client=("192.168.1.50", 5000))
+    assert remote.post("/api/quit").status_code == 403
+    cmd = relaunch_command(8061)
+    assert "--takeover" in cmd and "--demo" not in cmd and "8061" in cmd

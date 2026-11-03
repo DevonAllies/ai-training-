@@ -706,6 +706,18 @@ $("#btn-voice-test").addEventListener("click", async () => {
     msg($("#s-msg"), r.backend === "unavailable" ? "Windows voice not available – use the browser overlay with ?voice=1." : "Speaking…", "ok"); }
   catch (e) { msg($("#s-msg"), e.message, "err"); }
 });
+// ------------------------------------------------------------ demo mode
+$("#demo-exit").addEventListener("click", async () => {
+  $("#demo-exit").disabled = true;
+  $("#demo-banner span").textContent = "Restarting SimCoach in live mode…";
+  try { await api("/api/exit_demo", { method: "POST" }); } catch { /* the old instance may close mid-request */ }
+  for (let i = 0; i < 60; i++) {                       // wait for the live instance, then reload
+    await new Promise((r) => setTimeout(r, 1000));
+    try { const st = await api("/api/status"); if (!st.demo) { location.reload(); return; } } catch { /* restarting */ }
+  }
+  $("#demo-banner span").textContent = "Couldn't restart automatically – quit SimCoach from the tray and start it again.";
+});
+
 // ------------------------------------------------------------ updates
 function describeUpdate(u) {
   const when = u.checked_at ? " · checked " + new Date(u.checked_at * 1000).toLocaleTimeString() : "";
@@ -754,6 +766,7 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
     const st = await api("/api/status");
     state.units = st.config.units; applyUnits();
     $("#ver").textContent = "v" + st.version;
+    $("#demo-banner").classList.toggle("hidden", !st.demo);
     if (!st.config.has_token && !st.demo) showTab("settings");
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});
