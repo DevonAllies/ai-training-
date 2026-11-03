@@ -42,6 +42,7 @@ class TokenIn(BaseModel):
     voice_native: bool | None = None
     voice_practice_only: bool | None = None
     focus_target: float | None = None
+    start_with_windows: bool | None = None
 
 
 class FocusIn(BaseModel):
@@ -126,14 +127,25 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
     def index():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/favicon.ico")
+    def favicon():
+        return FileResponse(STATIC / "icon.png")
+
     @app.get("/api/status")
     def status():
         return {"version": __version__, "demo": demo_mode, "live": engine.snapshot(),
-                "config": config.public()}
+                "config": public_config()}
+
+    def public_config():
+        from . import autostart
+        d = config.public()
+        d["start_with_windows"] = autostart.is_enabled()
+        d["autostart_supported"] = autostart.supported()
+        return d
 
     @app.get("/api/config")
     def get_config():
-        return config.public()
+        return public_config()
 
     @app.post("/api/config")
     def set_config(body: TokenIn):
@@ -165,8 +177,14 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
         if body.focus_target is not None:
             config.focus_target = max(0.0, min(1.0, body.focus_target))
             engine.coach.focus.target = config.focus_target
+        if body.start_with_windows is not None:
+            from . import autostart
+            try:
+                autostart.set_enabled(body.start_with_windows)
+            except OSError as exc:
+                raise HTTPException(500, f"Could not change startup setting: {exc}") from exc
         config.save()
-        return config.public()
+        return public_config()
 
     # --------------------------------------------------------------- garage61
     @app.get("/api/g61/me")

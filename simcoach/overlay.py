@@ -52,7 +52,8 @@ def fmt_time(s: float | None) -> str:
 class OverlayWindow:
     W, H = 380, 268
 
-    def __init__(self, get_state, config: Config, on_quit=None):
+    def __init__(self, get_state, config: Config, on_quit=None, stop_event=None):
+        self.stop_event = stop_event
         self.get_state = get_state
         self.config = config
         self.on_quit = on_quit
@@ -143,6 +144,9 @@ class OverlayWindow:
         self.root.mainloop()
 
     def _tick(self):
+        if self.stop_event is not None and self.stop_event.is_set():   # quit from tray
+            self.root.destroy()
+            return
         try:
             st = self.get_state()
             self.mode_var.set(self.config.overlay_mode)
@@ -260,5 +264,5 @@ class OverlayWindow:
                               font=font(8 if n > 5 else 9, True, True))
 
 
-def run_overlay(get_state, config: Config, on_quit=None) -> None:
-    OverlayWindow(get_state, config, on_quit).run()
+def run_overlay(get_state, config: Config, on_quit=None, stop_event=None) -> None:
+    OverlayWindow(get_state, config, on_quit, stop_event).run()

@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SimCoach</title>
+<link rel="icon" href="/static/icon.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <div class="brand">SimCoach</div>
+  <div class="brand"><img src="/static/icon.png" alt="" class="logo">SimCoach <span id="ver" class="muted small-text"></span></div>
   <nav>
     <button class="tab active" data-tab="live">Live</button>
     <button class="tab" data-tab="laps">Garage 61 laps</button>
@@ -224,6 +225,7 @@
     <label class="block">Units
       <select id="s-units"><option value="metric">Metric (km/h, m)</option><option value="imperial">Imperial (mph, ft)</option></select></label>
     <label class="check"><input id="s-record" type="checkbox"> Save every clean lap I drive</label>
+    <label class="check" id="s-autostart-row"><input id="s-autostart" type="checkbox"> Start SimCoach with Windows (runs in the tray)</label>
     <h3>In-game overlay</h3>
     <p class="muted">A small always-on-top window over iRacing (run iRacing in borderless windowed mode).
       Drag to move, mouse wheel to resize, right-click for options. A browser version for OBS or a tablet is at

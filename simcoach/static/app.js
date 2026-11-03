@@ -519,6 +519,8 @@ async function loadSettings() {
   $("#s-overlay").value = c.overlay_mode || "practice";
   $("#s-opacity").value = c.overlay_opacity || 0.85;
   $("#s-voice").value = c.voice_mode || "cues";
+  $("#s-autostart").checked = !!c.start_with_windows;
+  $("#s-autostart-row").classList.toggle("hidden", !c.autostart_supported);
   $("#s-voice-native").checked = c.voice_native !== false;
   $("#s-voice-practice").checked = c.voice_practice_only !== false;
   $("#s-focus-target").value = (c.focus_target ?? 0.05).toFixed(2);
@@ -530,6 +532,7 @@ $("#btn-save").addEventListener("click", async () => {
     overlay_mode: $("#s-overlay").value, overlay_opacity: parseFloat($("#s-opacity").value),
     voice_mode: $("#s-voice").value, voice_native: $("#s-voice-native").checked,
     voice_practice_only: $("#s-voice-practice").checked,
+    ...(document.querySelector("#s-autostart-row").classList.contains("hidden") ? {} : { start_with_windows: $("#s-autostart").checked }),
     focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
   if ($("#s-token").value.trim()) body.garage61_token = $("#s-token").value.trim();
@@ -558,6 +561,7 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
   try {
     const st = await api("/api/status");
     state.units = st.config.units; applyUnits();
+    $("#ver").textContent = "v" + st.version;
     if (!st.config.has_token && !st.demo) showTab("settings");
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});

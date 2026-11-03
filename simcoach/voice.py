@@ -17,6 +17,7 @@ from __future__ import annotations
 import collections
 import itertools
 import logging
+import os
 import queue
 import threading
 import time
@@ -26,6 +27,8 @@ log = logging.getLogger(__name__)
 
 class VoiceCoach:
     def __init__(self, native: bool = True, max_queue: int = 3, log_size: int = 20):
+        if os.environ.get("SIMCOACH_NO_NATIVE_VOICE"):      # tests / CI machines
+            native = False
         self.native = native
         self._q: queue.Queue[str | None] = queue.Queue(maxsize=max_queue)
         self._thread: threading.Thread | None = None
@@ -83,6 +86,11 @@ class VoiceCoach:
 
     def _worker(self) -> None:
         try:
+            try:                                            # SAPI is COM: initialise it on this thread
+                import comtypes  # type: ignore
+                comtypes.CoInitialize()
+            except Exception:
+                pass
             import pyttsx3  # type: ignore
             engine = pyttsx3.init()
             engine.setProperty("rate", 185)

@@ -2,6 +2,7 @@ import os
 import tempfile
 
 os.environ.setdefault("SIMCOACH_HOME", tempfile.mkdtemp(prefix="simcoach_test_"))
+os.environ["SIMCOACH_NO_NATIVE_VOICE"] = "1"   # never talk out loud during tests
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402

@@ -18,16 +18,38 @@ Everything runs on your PC. The dashboard is a local web page at `http://127.0.0
 
 ## Install (Windows)
 
-1. Install **Python 3.10 or newer** from python.org and tick **"Add python.exe to PATH"**.
-2. Download or clone this repository.
-3. Double-click **`install.bat`** (one time only).
-4. Double-click **`run.bat`**. The dashboard opens in your browser.
+**Recommended: the installer**
 
-To try it without iRacing, run `run.bat --demo`. A simulated driver laps a demo track against a reference lap.
+1. Open the repository's **Releases** page on GitHub and download **`SimCoach-Setup-x.y.z.exe`**. Builds of any branch are also under **Actions → Build → (latest run) → Artifacts**.
+2. Run it. No admin rights are needed. You can choose a desktop shortcut and *Start with Windows*.
+3. SimCoach starts in the **system tray** (next to the clock), opens the dashboard in your browser, and shows the overlay over iRacing in practice sessions.
+   - Right-click the tray icon to open the dashboard, change overlay or voice mode, or quit.
+   - Clicking the shortcut again while it's running just reopens the dashboard.
+4. To uninstall, go to Windows **Settings → Apps → SimCoach**. Your laps, settings and imports in `%APPDATA%\SimCoach` are kept.
 
-Optional: `build_exe.bat` builds a standalone `dist\SimCoach\SimCoach.exe` that doesn't need Python installed.
+Windows SmartScreen may warn you because the installer isn't code-signed. Click **More info → Run anyway**.
 
-**Tip:** run `run.bat --host 0.0.0.0` to open the dashboard on a tablet or phone next to your rig at `http://<your-pc-ip>:8061`.
+Also available:
+- **Portable zip** (`SimCoach-portable-x.y.z.zip`): unzip anywhere and run `SimCoach.exe`.
+- **Start Menu → SimCoach demo**: try everything without iRacing.
+
+**From source (developers)**
+
+Install Python 3.10+ (tick "Add python.exe to PATH"), then run `install.bat` once and `run.bat` to start. `build_exe.bat` builds `SimCoach.exe`, and the installer too if [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed.
+
+**Tip:** run `SimCoach.exe --host 0.0.0.0` to open the dashboard on a tablet or phone next to your rig at `http://<your-pc-ip>:8061`.
+
+### Releases (maintainers)
+
+Every push runs **tests on Linux and Windows**, builds `SimCoach.exe` with PyInstaller, smoke-tests it, and builds the installer with Inno Setup. To publish a release:
+
+```bash
+# bump __version__ in simcoach/__init__.py (and pyproject.toml), commit, then:
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow attaches the installer and portable zip to a GitHub Release automatically.
 
 ## Connect Garage 61
 
@@ -127,4 +149,7 @@ python -m pytest tests           # run tests
 | `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
+| `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |
+| `packaging/` | PyInstaller spec, Inno Setup installer script, icon |
+| `.github/workflows/build.yml` | CI: tests, Windows build, installer, releases |
 | `simcoach/static/` | Dashboard UI (no external dependencies, works offline) |

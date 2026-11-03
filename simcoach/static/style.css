@@ -112,3 +112,4 @@ a { color: var(--accent); }
 .drill .streak i.on { background: var(--good); }
 .report-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 @media (max-width: 900px) { .report-grid { grid-template-columns: minmax(0, 1fr); } }
+.logo { width: 22px; height: 22px; vertical-align: -4px; margin-right: 8px; border-radius: 5px; }
