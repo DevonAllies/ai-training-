@@ -47,6 +47,8 @@ class TokenIn(BaseModel):
     update_mode: str | None = None
     lan_access: bool | None = None
     features: dict | None = None
+    goal_type: str | None = None
+    goal_value: float | None = None
 
 
 class CornerMapIn(BaseModel):
@@ -285,6 +287,11 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
                 updater.check_soon()
         if body.lan_access is not None:
             config.lan_access = body.lan_access
+        if body.goal_type in ("minutes", "sessions", "laps"):
+            config.goal_type = body.goal_type
+        if body.goal_value is not None:
+            config.goal_value = max(1.0, min(10000.0, float(body.goal_value)))
+            engine._goal_announced = False
         if body.features is not None:
             from .config import FEATURES
             for k, v in body.features.items():
@@ -918,6 +925,12 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if not config.on(feature):
             from .config import FEATURES
             raise HTTPException(409, f"'{FEATURES[feature]}' is switched off in Settings → Training features.")
+
+    @app.get("/api/goals")
+    def weekly_goal():
+        need("goals")
+        with engine.lock:
+            return engine.weekly_goal()
 
     @app.get("/api/features")
     def features():

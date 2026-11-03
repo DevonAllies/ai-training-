@@ -43,6 +43,7 @@ FEATURES = {
     "consistency": "Consistency trainer",
     "endurance": "Race, endurance & fuel saving",
     "practice": "Progress & practice plan",
+    "goals": "Weekly training goal & streak",
 }
 
 
@@ -75,6 +76,9 @@ class Config:
     record_history: bool = True
     # Let a tablet/phone on the home network open the dashboard (needs a restart to apply)
     lan_access: bool = False
+    # Weekly training goal: "minutes" on track, "sessions" or "laps" per week
+    goal_type: str = "minutes"
+    goal_value: float = 180
     # Training features on/off (keys from FEATURES)
     features: dict = field(default_factory=lambda: {k: True for k in FEATURES})
 

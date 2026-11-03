@@ -48,7 +48,7 @@ def new_session_id(track: str, car: str) -> str:
 
 
 def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict,
-                 consistency: dict | None = None) -> None:
+                 consistency: dict | None = None, drive_s: float | None = None) -> None:
     valid = [l for l in laps if l.get("valid")]
     data = {
         "id": sid, "date": sid[:15], "track": track, "car": car,
@@ -66,6 +66,8 @@ def save_session(sid: str, track: str, car: str, laps: list[dict], report: dict,
             if v is not None:
                 grades[k].append(v)
     data["grades"] = {k: round(statistics.fmean(v)) for k, v in grades.items()}
+    if drive_s:
+        data["drive_s"] = round(drive_s, 1)
     if consistency and consistency.get("score") is not None:
         data["consistency"] = {k: consistency.get(k) for k in ("score", "best_streak", "window", "target", "stdev")}
     fuel = [l["fuel_used"] for l in valid if l.get("fuel_used")]

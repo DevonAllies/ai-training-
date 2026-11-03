@@ -39,6 +39,7 @@
     <span id="sess-track">No session</span>
     <span id="sess-car"></span>
     <span class="grow"></span>
+    <span id="wg-chip" class="badge" data-feature="goals" title="Weekly training goal"></span>
     <span>Reference: <b id="ref-label">none</b> <span id="ref-time" class="muted"></span></span>
     <button id="btn-ref-best" class="small">Use session best</button>
   </div>
@@ -322,6 +323,20 @@
 
 <!-- ============================ PROGRESS ============================ -->
 <section id="tab-progress" class="tab-page">
+  <div class="card" data-feature="goals">
+    <div class="label">Weekly training goal</div>
+    <div class="analyze-grid">
+      <div>
+        <div id="wg-status"><span class="muted">Loading…</span></div>
+        <div class="filters" style="margin-top:10px">
+          <label>Goal <input id="wg-value" type="text" style="width:70px"></label>
+          <label>per week <select id="wg-type"><option value="minutes">minutes on track</option><option value="sessions">sessions</option><option value="laps">laps</option></select></label>
+          <button id="wg-save" class="small">Save goal</button>
+        </div>
+      </div>
+      <div><div class="label">Last 8 weeks</div><canvas id="wg-chart" height="130"></canvas></div>
+    </div>
+  </div>
   <div class="card">
     <div class="filters">
       <label>Car / track <select id="pg-combo"></select></label>

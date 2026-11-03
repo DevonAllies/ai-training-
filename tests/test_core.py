@@ -950,3 +950,39 @@ def test_feature_switches_hide_and_block():
     assert client.post("/api/consistency/start", json={"window": 0.5, "goal": 5}).json()["active"]
     _drive(eng, 1.2)
     assert eng.events and eng.overlay()["consistency"]["goal"] == 5
+
+
+# ------------------------------------------------------------- v12: weekly goal & streak
+def test_weekly_goal_streak():
+    from datetime import date
+    from simcoach.goals import weekly_summary
+    S = lambda d, m, laps=10: {"id": d + "_120000_x", "date": d + "_120000", "drive_s": m * 60,  # noqa: E731
+                               "laps": [], "lap_count": laps}
+    ss = [S("20261005", 30), S("20261012", 200), S("20261020", 100), S("20261021", 90), S("20261027", 181),
+          S("20261103", 60)]
+    g = weekly_summary(ss, "minutes", 180, today=date(2026, 11, 3))
+    assert g["streak"] == 3 and g["best_streak"] == 3 and not g["met"]        # this week unfinished: no break
+    assert g["this_week"] == 60 and g["remaining"] == 120 and g["days_left"] == 5 and len(g["weeks"]) == 8
+    g2 = weekly_summary(ss, "minutes", 180, today=date(2026, 11, 3), live={"minutes": 130})
+    assert g2["met"] and g2["streak"] == 4                                    # live session completes the week
+    g3 = weekly_summary(ss, "sessions", 2, today=date(2026, 11, 3))
+    assert g3["weeks"][-2]["sessions"] == 1 and g3["streak"] == 0              # only W43 had 2 sessions
+    assert weekly_summary(ss, "laps", 20, today=date(2026, 11, 3))["best_streak"] == 1
+    assert weekly_summary([], "minutes", 180, today=date(2026, 11, 3))["streak"] == 0
+
+
+def test_weekly_goal_live_and_api():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False, goal_type="minutes", goal_value=2)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    _drive(eng, 2.2)
+    assert eng.drive_s > 150                                                  # time on track is counted
+    g = client.get("/api/goals").json()
+    assert g["met"] and g["this_week"] >= 2
+    assert any("Weekly goal reached" in v["text"] for v in eng.coach.voice.log)
+    assert client.post("/api/config", json={"goal_type": "laps", "goal_value": 50}).json()["goal_type"] == "laps"
+    client.post("/api/config", json={"features": {"goals": False}})
+    assert client.get("/api/goals").status_code == 409

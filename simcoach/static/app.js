@@ -39,7 +39,7 @@ function showTab(name) {
   if (name === "sessions") loadSessions();
   if (name === "corners") initCorners();
   if (name === "race") refreshRace();
-  if (name === "progress") initProgress();
+  if (name === "progress") { initProgress(); loadGoal(); }
 }
 
 // ------------------------------------------------------------ live
@@ -986,6 +986,34 @@ $("#btn-restart").addEventListener("click", async () => {
   msg($("#s-msg"), "Couldn't restart automatically – quit SimCoach from the tray and start it again.", "err");
 });
 
+// ------------------------------------------------------------ weekly goal & streak
+const fmtGoal = (v, t) => t === "minutes" ? (v >= 60 ? `${Math.floor(v / 60)}h ${String(Math.round(v % 60)).padStart(2, "0")}m` : `${Math.round(v)} min`) : `${Math.round(v)} ${t}`;
+async function loadGoal() {
+  if (state.features && state.features.goals === false) return;
+  let g; try { g = await api("/api/goals"); } catch { return; }
+  state.goal = g;
+  $("#wg-chip").textContent = `Week ${fmtGoal(g.this_week, g.goal_type)} / ${fmtGoal(g.goal_value, g.goal_type)}` + (g.streak ? ` · streak ${g.streak}` : "");
+  $("#wg-chip").className = "badge " + (g.met ? "good" : "");
+  const st = $("#wg-status"); if (!st) return;
+  st.innerHTML = `<div><span class="wg-big">${fmtGoal(g.this_week, g.goal_type)}</span> <span class="muted">of ${fmtGoal(g.goal_value, g.goal_type)} this week</span></div>
+    <div class="wg-bar"><div style="width:${Math.round(g.progress * 100)}%"></div></div>
+    <div>${g.met ? "<b class='neg'>Goal met this week ✓</b>" : `${fmtGoal(g.remaining, g.goal_type)} to go · ${g.days_left} day${g.days_left === 1 ? "" : "s"} left`}</div>
+    <div style="margin-top:6px"><span class="streak-flame">Streak: ${g.streak} week${g.streak === 1 ? "" : "s"}</span> <span class="muted">· best ${g.best_streak}</span></div>`;
+  if (document.activeElement !== $("#wg-value")) { $("#wg-value").value = g.goal_value; $("#wg-type").value = g.goal_type; }
+  const vals = g.weeks.map((w) => w.value);
+  Charts.line($("#wg-chart"), [{ data: vals, color: Charts.css("--me"), width: 2 },
+    { data: g.weeks.map(() => g.goal_value), color: Charts.css("--good"), width: 1 }],
+    { ymin: 0, ymax: Math.max(g.goal_value, ...vals) * 1.15, fmt: (v) => g.goal_type === "minutes" ? (v / 60).toFixed(1) + "h" : v.toFixed(0) });
+}
+$("#wg-save").addEventListener("click", async () => {
+  const v = parseFloat($("#wg-value").value);
+  if (!(v > 0)) { alert("Enter a goal, e.g. 180 (minutes), 3 (sessions) or 60 (laps)"); return; }
+  try { await api("/api/config", { method: "POST", body: { goal_type: $("#wg-type").value, goal_value: v } }); loadGoal(); }
+  catch (e) { alert(e.message); }
+});
+$("#wg-type").addEventListener("change", (e) => { $("#wg-value").value = { minutes: 180, sessions: 3, laps: 60 }[e.target.value]; });
+setInterval(loadGoal, 60000);
+
 // ------------------------------------------------------------ training features on/off
 function applyFeatures(f) {
   if (!f) return;
@@ -1111,5 +1139,6 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});
   refreshUpdate();
+  loadGoal();
   connectWS();
 })();

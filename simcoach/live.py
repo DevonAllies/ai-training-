@@ -439,6 +439,8 @@ class LiveEngine:
         self.consistency = ConsistencyTrainer()
         self.fuel_save: dict | None = None        # active lift-and-coast plan
         self.history_id: str | None = None
+        self.drive_s = 0.0                         # time on track this session (weekly goal)
+        self._goal_announced = False
         self.history_laps: collections.deque[dict] = collections.deque(maxlen=history.MAX_LAPS)
         self.coach = SessionCoach(VoiceCoach(native=config.voice_native))
         self.coach.focus.target = config.focus_target
@@ -558,6 +560,7 @@ class LiveEngine:
                     self.fuel_save = None
                     self.history_id = None
                     self.history_laps.clear()
+                    self.drive_s = 0.0
                     if self.ref_corners:
                         apply_names(self.ref_corners, self.track_name())
                     if self.on_session_change:
@@ -590,6 +593,10 @@ class LiveEngine:
     def _process(self, s: dict) -> None:
         prev = self.last_sample
         self.last_sample = s
+        if prev is not None and prev.get("on_track") and not s.get("on_pit_road"):
+            dt = s["session_time"] - prev["session_time"]
+            if 0 < dt < 1.0:                           # ignore pauses / session jumps
+                self.drive_s += dt
         if prev is None:
             self.buf = LapBuffer(None)
             self.buf.add(s)
@@ -853,9 +860,29 @@ class LiveEngine:
                                                                "fuel_used")})
             cons = self.consistency.status() if self.consistency.laps else None
             history.save_session(self.history_id, lap.meta.get("track", ""), lap.meta.get("car", ""),
-                                 list(self.history_laps), self.coach.report(), consistency=cons)
+                                 list(self.history_laps), self.coach.report(), consistency=cons,
+                                 drive_s=self.drive_s)
+            self._check_weekly_goal()
         except OSError:
             log.warning("could not write session history")
+
+    def weekly_goal(self) -> dict:
+        """This week's goal progress including the session in progress."""
+        from . import goals
+        sessions = [s for s in history.load_sessions() if s.get("id") != self.history_id]
+        live = {"minutes": self.drive_s / 60.0, "laps": len(self.history_laps),
+                "sessions": 1 if (self.history_laps or self.drive_s > 60) else 0}
+        return goals.weekly_summary(sessions, self.config.goal_type, self.config.goal_value, live=live)
+
+    def _check_weekly_goal(self) -> None:
+        if self._goal_announced or not self.config.on("goals"):
+            return
+        g = self.weekly_goal()
+        if g["met"]:
+            self._goal_announced = True
+            streak = g["streak"]
+            self.coach._say(f"Weekly goal reached. {streak} week streak" if streak > 1 else "Weekly goal reached",
+                            important=True)
 
     # ------------------------------------------------------------- fuel save
     def enable_fuel_save(self, save_per_lap: float | None = None, extra_lap: bool = False) -> dict:

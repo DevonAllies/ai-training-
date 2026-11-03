@@ -150,3 +150,8 @@ details summary { cursor: pointer; margin-top: 8px; }
 .ct-big { font: 700 34px Consolas, monospace; }
 .ct-laps { list-style: none; padding: 0; margin: 6px 0 0; font-size: 12px; }
 .ct-laps li { padding: 2px 0; }
+
+.wg-big { font: 700 30px Consolas, monospace; }
+.wg-bar { height: 12px; background: #0f1318; border-radius: 6px; overflow: hidden; margin: 6px 0; }
+.wg-bar div { height: 100%; background: var(--good); border-radius: 6px; }
+.streak-flame { font-weight: 700; color: var(--ref); }

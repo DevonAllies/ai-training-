@@ -180,6 +180,16 @@ The Live tab's **Consistency trainer** is for race pace: the same lap, every lap
 5. **The track map** shows where you're inconsistent: red is a corner that varies more than your typical corner, green is steadier.
 6. **From the plan:** the practice plan's *Consistency run* starts the trainer with one click and ticks itself off when you reach the goal.
 
+## Weekly training goal and streak
+
+At the top of the **Progress** tab you can set a weekly goal: **minutes on track** (default 3 hours), **sessions** or **laps** per week.
+
+- **This week:** shows your progress so far, what's left and the days remaining. The voice calls *"Weekly goal reached. 4 week streak"* when you hit it.
+- **Streak:** the number of weeks in a row with the goal met, plus your best streak. The week you're in never breaks it until it's over.
+- **Last 8 weeks:** a chart against the goal line, and a small *"Week 1h 20m / 3h · streak 3"* chip on the Live tab.
+
+Time on track is measured live (pit lane and pauses don't count).
+
 ## Training features on/off
 
 **Settings → Training features** switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, and progress/practice plan. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
@@ -329,6 +339,7 @@ python -m pytest tests           # run tests
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/lan.py` | Tablet/phone access on the home network (QR code, settings guard) |
 | `simcoach/consistency.py` | Consistency trainer (window, streak, why a lap fell out, score) |
+| `simcoach/goals.py` | Weekly training goal and streak |
 | `simcoach/drills.py` | Drill library (brake ladder, trail braking, turn-in, apex speed, throttle, consistency) |
 | `simcoach/static/report.html` | Printable post-session report |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
