@@ -175,19 +175,36 @@ class Updater:
             self._set(status="available", progress=0.0)
         return self.status()
 
+    def _get_asset(self, asset: dict, stream: bool = False, timeout: int = 30):
+        """Fetch a release asset: the normal download link first, then the API asset
+        endpoint (works on networks that block github.com web downloads)."""
+        last_exc: Exception | None = None
+        for url, accept in ((asset.get("browser_download_url", ""), None),
+                            (asset.get("url", ""), "application/octet-stream")):
+            if not url or not _allowed(url):
+                continue
+            try:
+                headers = {"Accept": accept} if accept else {}
+                r = self.http.get(url, stream=stream, timeout=timeout, headers=headers)
+                r.raise_for_status()
+                return r
+            except Exception as exc:
+                last_exc = exc
+                log.info("download via %s failed: %s", url, exc)
+        raise last_exc or RuntimeError("Release asset has no usable download URL")
+
     def _expected_sha256(self, setup: dict, sums: dict | None) -> str | None:
         digest = setup.get("digest") or ""
         if digest.startswith("sha256:"):
             return digest.split(":", 1)[1].lower()
-        if sums and _allowed(sums.get("browser_download_url", "")):
+        if sums:
             try:
-                r = self.http.get(sums["browser_download_url"], timeout=15)
-                r.raise_for_status()
+                r = self._get_asset(sums, timeout=15)
                 for line in r.text.splitlines():
                     parts = line.split()
                     if len(parts) == 2 and parts[1].lstrip("*") == setup["name"]:
                         return parts[0].lower()
-            except requests.RequestException as exc:
+            except Exception as exc:
                 log.warning("could not fetch SHA256SUMS: %s", exc)
         return None
 
@@ -195,8 +212,7 @@ class Updater:
         a = self._asset
         if not a:
             return self.status()
-        url = a.get("browser_download_url", "")
-        if not _allowed(url):
+        if not (_allowed(a.get("browser_download_url", "")) or _allowed(a.get("url", ""))):
             self._set(status="error", error="Refusing to download from an unexpected host.")
             return self.status()
         if not self._sha256:
@@ -209,8 +225,12 @@ class Updater:
         h = hashlib.sha256()
         total = int(a.get("size") or 0)
         done = 0
-        with self.http.get(url, stream=True, timeout=30) as r:
-            r.raise_for_status()
+        try:
+            r = self._get_asset(a, stream=True)
+        except Exception as exc:
+            self._set(status="error", error=f"Download failed: {exc}")
+            return self.status()
+        with r:
             with open(part, "wb") as f:
                 for chunk in r.iter_content(chunk_size=256 * 1024):
                     if self._stop.is_set():
