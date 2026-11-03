@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simcoach"
-version = "0.5.0"
+version = "0.6.0"
 description = "iRacing training coach: live delta and corner-by-corner coaching against Garage 61 laps"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -52,6 +52,26 @@ class CornerMapIn(BaseModel):
     corners: list[dict]
 
 
+class OptimalIn(BaseModel):
+    track: str | None = None
+    include_teammates: bool = True
+    set_reference: bool = False
+
+
+class RacePlanIn(BaseModel):
+    race_minutes: float | None = None
+    race_laps: int | None = None
+    avg_lap: float | None = None
+    fuel_per_lap: float | None = None
+    tank: float | None = None
+    pit_loss_s: float = 60.0
+
+
+class FuelSaveIn(BaseModel):
+    mode: str = "off"                  # "off" | "target" | "extra_lap"
+    save_per_lap: float | None = None
+
+
 class LapImportIn(BaseModel):
     upload_id: str
     index: int = 0
@@ -362,6 +382,118 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if body.set_reference:
             engine.set_reference(lap)
         return {"file": name, "label": lap.label, "reference": engine.ref_label if body.set_reference else None}
+
+    # ------------------------------------------------------- optimal lap
+    @app.post("/api/optimal")
+    def build_optimal_lap(body: OptimalIn):
+        from .optimal import build_optimal, same_track
+        track = (body.track or engine.track_name() or "").strip()
+        cands, files_old = [], []
+        for p in sorted(laps_dir().glob("*.csv"), reverse=True)[:400]:
+            try:
+                lap = Lap.load(p)
+            except (OSError, ValueError):
+                continue
+            src = str(lap.meta.get("source", ""))
+            if src == "optimal":
+                if same_track(lap.meta.get("track", ""), track):
+                    files_old.append(p)
+                continue
+            if not lap.meta.get("valid", True) or (src.startswith("teammate") and not body.include_teammates):
+                continue
+            if track and not same_track(lap.meta.get("track", ""), track):
+                continue
+            cands.append(lap)
+        if not track and cands:
+            track = cands[0].meta.get("track", "")
+            cands = [l for l in cands if same_track(l.meta.get("track", ""), track)]
+        try:
+            lap, segs = build_optimal(cands)
+        except ValueError as exc:
+            raise HTTPException(422, f"{exc} (found {len(cands)} clean lap(s) for '{track or 'this track'}')") from exc
+        for p in files_old:                       # keep one optimal lap per track
+            p.unlink(missing_ok=True)
+        import datetime as _dt
+        import re as _re
+        name = f"{_dt.datetime.now():%Y%m%d_%H%M%S}_optimal_{_re.sub(r'[^A-Za-z0-9]+', '_', track)[:60]}.csv"
+        lap.meta["date"] = _dt.datetime.now().isoformat(timespec="seconds")
+        lap.save(laps_dir() / name)
+        if body.set_reference:
+            engine.set_reference(lap)
+        return {"file": name, "label": lap.label, "lap_time": round(lap.lap_time, 3),
+                "best_single_lap": lap.meta["best_single_lap"], "laps_used": len({s.source for s in segs}),
+                "candidates": len(cands), "segments": lap.meta["segments"], "track": track}
+
+    # ------------------------------------------------------------ progress
+    @app.get("/api/progress/combos")
+    def progress_combos():
+        from . import history
+        return history.combos()
+
+    @app.get("/api/progress")
+    def progress(track: str = "", car: str = ""):
+        from . import history
+        track = track or engine.track_name()
+        car = car or engine.session.get("car", "")
+        if not track:
+            combos = history.combos()
+            if combos:
+                track, car = combos[0]["track"], combos[0]["car"]
+        return history.progress(track, car)
+
+    @app.get("/api/practice_plan")
+    def practice_plan(track: str = "", car: str = "", minutes: int = 45):
+        from . import history
+        with engine.lock:
+            rep = engine.coach.report()
+            grades = (engine.last_comparison or {}).get("scores")
+        source = "this session"
+        if not rep.get("laps"):
+            sessions = history.load_sessions(track or engine.track_name(), car or engine.session.get("car", ""))
+            if not sessions:
+                sessions = history.load_sessions()
+            if not sessions:
+                return {"plan": [], "source": None,
+                        "note": "Drive a session against a reference first - the plan is built from it."}
+            last = sessions[-1]
+            rep, grades, source = last["report"], last.get("grades"), f"your last session ({last['date'][:8]})"
+        return {"plan": history.practice_plan(rep, grades, minutes), "source": source}
+
+    # --------------------------------------------------------- race / fuel
+    @app.get("/api/race")
+    def race_status():
+        return engine.race_status()
+
+    @app.post("/api/race/plan")
+    def race_plan(body: RacePlanIn):
+        from .race import lift_plan, plan_race
+        st = engine.race_status()
+        avg = body.avg_lap or st.get("stint_avg") or (engine.reference.lap_time if engine.reference else None)
+        fpl = body.fuel_per_lap or st.get("fuel_per_lap")
+        tank = body.tank or st.get("tank")
+        if not (avg and fpl and tank):
+            raise HTTPException(422, "Need lap time, fuel per lap and tank size - drive a few laps or enter them.")
+        cost = None
+        base = engine.last_lap or engine.session_best or engine.reference
+        if base is not None:
+            lp = lift_plan(base, target_save_per_lap=max(0.05, fpl * 0.05), fuel_per_lap=fpl)
+            cost = lp.get("cost_per_litre_s")
+        try:
+            return plan_race(avg, fpl, tank, race_time_s=(body.race_minutes or 0) * 60 or None,
+                             race_laps=body.race_laps, pit_loss_s=body.pit_loss_s, lift_cost_per_litre=cost)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post("/api/fuelsave")
+    def fuel_save(body: FuelSaveIn):
+        if body.mode == "off":
+            engine.disable_fuel_save()
+            return {"active": False}
+        plan = engine.enable_fuel_save(save_per_lap=body.save_per_lap if body.mode == "target" else None,
+                                       extra_lap=body.mode == "extra_lap")
+        if not plan.get("available"):
+            raise HTTPException(422, plan.get("reason", "Fuel saving plan not available"))
+        return {"active": True, **plan}
 
     @app.get("/api/local/laps")
     def local_laps():

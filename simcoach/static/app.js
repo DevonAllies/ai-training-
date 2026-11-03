@@ -38,6 +38,8 @@ function showTab(name) {
   if (name === "settings") loadSettings();
   if (name === "sessions") loadSessions();
   if (name === "corners") initCorners();
+  if (name === "race") refreshRace();
+  if (name === "progress") initProgress();
 }
 
 // ------------------------------------------------------------ live
@@ -156,7 +158,8 @@ function renderSectors(done, n, targets) {
 }
 
 const GRADE_LABELS = [["braking", "Braking"], ["turn_in", "Turn-in"], ["trail_braking", "Trail braking"],
-  ["min_speed", "Min speed"], ["throttle", "Throttle"], ["technique", "Technique"], ["pace", "Pace"]];
+  ["min_speed", "Min speed"], ["throttle", "Throttle"], ["line", "Racing line"], ["car_control", "Car control"],
+  ["technique", "Technique"], ["pace", "Pace"]];
 const gradeColor = (v) => (v >= 85 ? "var(--good)" : v >= 65 ? "var(--ref)" : "var(--bad)");
 function renderGrades(sc) {
   const el = $("#grades");
@@ -321,6 +324,120 @@ $("#g61-laps").addEventListener("click", async (ev) => {
   }
 });
 
+// ------------------------------------------------------------ optimal lap
+async function buildOptimal(setRef) {
+  msg($("#opt-msg"), "Building your optimal lap…");
+  try {
+    const r = await api("/api/optimal", { method: "POST", body: { include_teammates: $("#opt-team").checked, set_reference: setRef } });
+    msg($("#opt-msg"), `${r.label}${setRef ? " – now your live reference." : " saved to your laps."}`, "ok");
+    const gain = r.best_single_lap - r.lap_time;
+    $("#opt-result").innerHTML = `<p>Optimal <b>${fmtTime(r.lap_time)}</b> vs your best single lap ${fmtTime(r.best_single_lap)}
+      – <b class="neg">${gain.toFixed(3)}s</b> is already in you. Built from ${r.laps_used} of ${r.candidates} laps.</p>
+      <table class="tbl"><thead><tr><th>Part of the lap</th><th>Time</th><th>Taken from</th></tr></thead><tbody>` +
+      r.segments.map((s, i) => `<tr><td>${i + 1} (${(s.start / 10).toFixed(0)}–${(s.end / 10).toFixed(0)} %)</td><td>${s.duration.toFixed(3)}s</td><td>${esc(s.from)}</td></tr>`).join("") +
+      "</tbody></table>";
+    loadLocalLaps(); if (setRef) refreshReference();
+  } catch (e) { msg($("#opt-msg"), e.message, "err"); }
+}
+$("#opt-build").addEventListener("click", () => buildOptimal(false));
+$("#opt-build-ref").addEventListener("click", () => buildOptimal(true));
+
+// ------------------------------------------------------------ race / endurance / fuel
+let raceTimer = null;
+const fmtL = (v, d = 2) => (v == null ? "–" : v.toFixed(d) + " L");
+async function refreshRace() {
+  clearTimeout(raceTimer);
+  if (!$("#tab-race").classList.contains("active")) return;
+  try {
+    const r = await api("/api/race");
+    const card = (label, val, sub = "") => `<div class="card stat"><div class="label">${label}</div><div class="big">${val}</div><div class="muted small-text">${sub}</div></div>`;
+    const pw = r.pit_window ? `lap ${r.pit_window.open}–${r.pit_window.close}` : (r.stops_needed === 0 ? "no stop needed" : "–");
+    $("#race-cards").innerHTML =
+      card("Fuel", fmtL(r.fuel_level, 1), r.tank ? `tank ${r.tank.toFixed(0)} L` : "") +
+      card("Fuel per lap", fmtL(r.fuel_per_lap, 3), r.laps_of_fuel != null ? `${r.laps_of_fuel.toFixed(1)} laps left in the tank` : "drive a lap") +
+      card("Laps to go", r.laps_to_go != null ? r.laps_to_go.toFixed(0) : "–", r.fuel_to_finish != null ? `need ${r.fuel_to_finish.toFixed(1)} L more · ${r.stops_needed ?? "–"} stop(s)` : "") +
+      card("Pit window", pw, `stint ${r.stint} · ${r.stint_laps} laps`) +
+      card("Stint pace", fmtTime(r.stint_avg), r.dropoff != null ? `${r.dropoff > 0 ? "+" : ""}${r.dropoff.toFixed(3)} s/lap trend · ±${(r.consistency ?? 0).toFixed(2)}s` : "3+ laps for the trend");
+    const laps = r.laps || [];
+    const green = laps.filter((l) => l.valid && !l.pit);
+    if (green.length > 1) Charts.line($("#c-stint"), [{ data: green.map((l) => l.lap_time), color: Charts.css("--me"), width: 2 }], { fmt: (v) => v.toFixed(1) });
+    $("#stint-table tbody").innerHTML = laps.slice().reverse().map((l) => `<tr><td>${l.lap}</td><td>${l.stint}</td><td>${fmtTime(l.lap_time)}</td>
+      <td>${l.fuel != null ? l.fuel.toFixed(3) + " L" : "–"}</td><td class="muted">${l.pit ? "pit" : l.valid ? "" : "invalid"}</td></tr>`).join("");
+    renderFuelPlan(r.fuel_save);
+  } catch (e) { /* not connected */ }
+  raceTimer = setTimeout(refreshRace, 2000);
+}
+
+function renderFuelPlan(p) {
+  const el = $("#fs-plan");
+  if (!p) { el.innerHTML = '<span class="muted">Fuel saving is off.</span>'; return; }
+  const x = p.extra_lap ? `<p>Tank lasts <b>${p.extra_lap.laps_now.toFixed(2)}</b> laps now – goal <b>${p.extra_lap.laps_goal}</b>: save ${fmtL(p.extra_lap.save_per_lap, 3)} per lap.</p>` : "";
+  el.innerHTML = x + `<p><b>${p.reached ? "Plan" : "Best possible"}:</b> save ~${fmtL(p.total_saved_l, 3)} per lap for ~${p.total_lost_s.toFixed(2)} s per lap (estimate${p.coast_model.measured ? ", coast-down measured from your lap" : ", typical coast-down – drive with some lifts to measure yours"}).</p>
+    <table class="tbl"><thead><tr><th>Corner</th><th>Lift before brake point</th><th>Fuel saved</th><th>Time cost</th></tr></thead><tbody>` +
+    (p.plan || []).map((z) => `<tr><td><b>${esc(z.title || z.corner)}</b> <span class="muted">${z.speed_kmh} km/h</span></td><td>${dist(z.lift_m)}</td><td>${z.saved_l.toFixed(3)} L</td><td>${z.lost_s.toFixed(3)} s</td></tr>`).join("") +
+    "</tbody></table><p class='muted small-text'>Lift off the throttle completely at the marked distance, coast, then brake a little later and lighter. The overlay shows LIFT.</p>";
+}
+async function fuelSave(body) {
+  msg($("#fs-msg"), "Planning…");
+  try { const r = await api("/api/fuelsave", { method: "POST", body }); msg($("#fs-msg"), r.active ? "Fuel saving active – watch for LIFT on the overlay." : "Fuel saving off.", "ok"); renderFuelPlan(r.active ? r : null); }
+  catch (e) { msg($("#fs-msg"), e.message, "err"); }
+}
+$("#fs-extra").addEventListener("click", () => fuelSave({ mode: "extra_lap" }));
+$("#fs-target-go").addEventListener("click", () => fuelSave({ mode: "target", save_per_lap: parseFloat($("#fs-target").value) || 0.1 }));
+$("#fs-off").addEventListener("click", () => fuelSave({ mode: "off" }));
+
+$("#ep-go").addEventListener("click", async () => {
+  const num = (id) => { const v = $(id).value.trim(); return v ? (id === "#ep-lap" ? parseLapTime(v) : parseFloat(v)) : null; };
+  msg($("#ep-msg"), "Planning…");
+  try {
+    const r = await api("/api/race/plan", { method: "POST", body: { race_minutes: num("#ep-min"), race_laps: num("#ep-laps"),
+      avg_lap: num("#ep-lap"), fuel_per_lap: num("#ep-fpl"), tank: num("#ep-tank"), pit_loss_s: num("#ep-pit") || 60 } });
+    msg($("#ep-msg"), "");
+    $("#ep-result").innerHTML = `<p><b>${r.total_laps}</b> laps · <b>${r.stops}</b> stop(s) · ${r.laps_per_tank} laps per tank at ${fmtL(r.fuel_per_lap, 3)}/lap</p>
+      <p>Stints: ${r.stints.map((n, i) => `<span class="badge">${i + 1}: ${n} laps</span>`).join("")}</p>
+      ${r.fuel_per_stop.length ? `<p class="muted small-text">Fuel per stop: ${r.fuel_per_stop.map((f) => f + " L").join(", ")}</p>` : ""}
+      <div class="label">What fuel saving buys you</div>` + (r.options.map((o) => `<div class="plan-step"><b>${esc(o.name)}</b>
+        save ${fmtL(o.save_per_lap, 3)}/lap (${o.save_pct}%)${o.time_cost_per_lap_s != null ? ` · costs ~${o.time_cost_per_lap_s.toFixed(3)} s/lap (${o.time_cost_race_s.toFixed(0)} s over the race)` : ""}
+        ${o.net_gain_s != null ? `<br><span class="${o.net_gain_s > 0 ? "neg" : "pos"}">Net ${o.net_gain_s > 0 ? "gain" : "loss"}: ${Math.abs(o.net_gain_s).toFixed(0)} s vs making the extra stop</span>` : ""}</div>`).join("") || '<span class="muted">No useful saving option.</span>');
+  } catch (e) { msg($("#ep-msg"), e.message, "err"); }
+});
+
+// ------------------------------------------------------------ progress
+async function initProgress() {
+  const combos = await api("/api/progress/combos").catch(() => []);
+  const sel = $("#pg-combo"), keep = sel.value;
+  sel.innerHTML = combos.length ? combos.map((c, i) => `<option value="${i}">${esc(c.track)} · ${esc(c.car)} (${c.sessions} sessions)</option>`).join("")
+    : '<option value="">No sessions yet – drive with SimCoach running</option>';
+  state.combos = combos;
+  if (keep) sel.value = keep;
+  loadProgress();
+}
+$("#pg-combo").addEventListener("change", loadProgress);
+async function loadProgress() {
+  const c = (state.combos || [])[+$("#pg-combo").value];
+  const q = c ? new URLSearchParams({ track: c.track, car: c.car }) : "";
+  const p = await api("/api/progress?" + q).catch(() => null);
+  if (!p || !p.sessions.length) { $("#pg-grades").innerHTML = ""; return; }
+  const best = p.sessions.map((s) => s.best), pb = p.sessions.map((s) => s.pb_so_far);
+  $("#pg-chart-note").classList.toggle("hidden", p.sessions.length > 1);
+  Charts.line($("#c-pb"), [{ data: best, color: Charts.css("--me"), width: 2 }, { data: pb, color: Charts.css("--good"), width: 1 }],
+    { fmt: (v) => fmtTime(v).slice(0, 6) });
+  const keys = ["braking", "turn_in", "min_speed", "throttle", "line", "car_control"];
+  $("#pg-grades").innerHTML = `<thead><tr><th>Session</th><th>Best</th>${keys.map((k) => `<th>${(GRADE_LABELS.find((g) => g[0] === k) || [k, k])[1]}</th>`).join("")}</tr></thead><tbody>` +
+    p.sessions.slice().reverse().map((s) => `<tr><td>${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}</td><td>${fmtTime(s.best)}</td>` +
+      keys.map((k) => `<td>${s.grades[k] ?? "–"}</td>`).join("") + "</tr>").join("") + "</tbody>";
+  $("#pg-recurring").innerHTML = p.recurring.map((r) => `<li><b>${esc(r.corner)}</b>: ${esc(r.issue)} <span class="muted">(${r.sessions} sessions)</span></li>`).join("") || '<li class="muted">Nothing repeats yet.</li>';
+  $("#pg-improved").innerHTML = p.improved.map((r) => `<li><b>${esc(r.corner)}</b>: <span class="${r.gain > 0 ? "neg" : "pos"}">${r.gain > 0 ? "−" : "+"}${Math.abs(r.gain).toFixed(2)}s</span> per lap</li>`).join("") || '<li class="muted">Needs 2+ sessions.</li>';
+}
+$("#pg-plan").addEventListener("click", async () => {
+  const c = (state.combos || [])[+$("#pg-combo").value];
+  const q = new URLSearchParams({ minutes: $("#pg-min").value, ...(c ? { track: c.track, car: c.car } : {}) });
+  const r = await api("/api/practice_plan?" + q);
+  $("#pg-plan-out").innerHTML = r.plan.length ? `<p class="muted small-text">Based on ${esc(r.source)}.</p>` +
+    r.plan.map((p, i) => `<div class="plan-step"><b>${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}</div>`).join("")
+    : `<span class="muted">${esc(r.note || "No data yet.")}</span>`;
+});
+
 // ------------------------------------------------------------ teammate lap files
 const tm = { upload: null };
 function parseLapTime(s) {
@@ -467,8 +584,24 @@ function renderComparison(r) {
       Charts.trackMap($("#c-map"), lat, lon, sm, { labels: r.corners.map((k) => ({ i: k.apex, text: k.name })) });
     }
   };
-  state.redrawAnalysis = draw;
-  draw();
+  const hasLine = !!(c.line && me.lat && ref.lat);
+  $("#line-none").classList.toggle("hidden", hasLine);
+  $("#c-line").classList.toggle("hidden", !hasLine);
+  $("#c-lines").parentElement.parentElement.classList.toggle("hidden", !hasLine);
+  state.lineZoom = null;
+  const drawLines = () => {
+    if (!hasLine) return;
+    Charts.line($("#c-line"), [{ data: c.line, color: Charts.css("--me"), width: 1.5 }],
+      { n: 1000, regions, zeroLine: true, fmt: (v) => v.toFixed(1) });
+    const z = state.lineZoom;
+    Charts.trackLines($("#c-lines"), [{ lat: ref.lat, lon: ref.lon, color: Charts.css("--ref"), width: z ? 3 : 2 },
+      { lat: me.lat, lon: me.lon, color: Charts.css("--me"), width: z ? 3 : 1.5 }],
+      { range: z, labels: r.corners.map((k) => ({ i: k.apex, text: k.name })), scaleM: z ? 20 : 500 });
+  };
+  const drawAll = () => { draw(); drawLines(); };
+  state.redrawAnalysis = drawAll;
+  drawAll();
+  renderCarControl(c);
 
   $("#corner-table tbody").innerHTML = c.corners.map((k) => `
     <tr><td><b>${esc(k.title || k.name)}</b></td>
@@ -476,10 +609,50 @@ function renderComparison(r) {
         <div class="muted small-text">entry ${fmtDelta(k.entry_lost)} / exit ${fmtDelta(k.exit_lost)}</div></td>
       <td>${k.brake_point_m === null ? "–" : signed(state.units === "metric" ? k.brake_point_m : k.brake_point_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
       <td>${k.turn_in_m === null || k.turn_in_m === undefined ? "–" : signed(state.units === "metric" ? k.turn_in_m : k.turn_in_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
+      <td>${k.line_apex_m == null ? "–" : (Math.abs(k.line_apex_m) < 0.5 ? "on line" : signed(state.units === "metric" ? k.line_apex_m : k.line_apex_m * 3.281, 1, state.units === "metric" ? " m" : " ft") + (k.line_apex_m > 0 ? " wide" : " tight"))}</td>
       <td>${signed(state.units === "metric" ? k.min_speed_diff_kmh : k.min_speed_diff_kmh / 1.609, 1, " " + spdUnit())}</td>
       <td>${signed(state.units === "metric" ? k.exit_speed_diff_kmh : k.exit_speed_diff_kmh / 1.609, 1, " " + spdUnit())}</td>
       <td>${k.throttle_point_m === null ? "–" : signed(state.units === "metric" ? k.throttle_point_m : k.throttle_point_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
+      <td>${carBadges(k)}</td>
       <td class="tips">${k.tips.map((t) => `<div>${esc(t)}</div>`).join("") || '<span class="muted">On pace</span>'}</td></tr>`).join("");
+  $("#corner-table tbody").querySelectorAll("tr").forEach((tr, i) => tr.addEventListener("click", () => {
+    const k = r.corners[i]; state.lineZoom = [k.start - 15, k.end + 15];
+    if (state.redrawAnalysis) state.redrawAnalysis();
+    $("#line-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+}
+
+function carBadges(k) {
+  const b = [];
+  if (k.oversteer_m >= 4) b.push(`<span class="badge bad">oversteer ${Math.round(k.oversteer_m)} m</span>`);
+  if (k.understeer > 1.3) b.push(`<span class="badge warn">understeer</span>`);
+  if (k.wheelspin_m_diff >= 6) b.push(`<span class="badge bad">wheelspin</span>`);
+  if (k.abs_m_diff >= 10) b.push(`<span class="badge warn">ABS +${Math.round(k.abs_m_diff)} m</span>`);
+  if (k.corrections_diff >= 3) b.push(`<span class="badge warn">+${k.corrections_diff} corrections</span>`);
+  if (k.gear_apex_diff) b.push(`<span class="badge">gear ${k.gear_apex} (ref ${k.gear_apex_ref})</span>`);
+  return b.join("") || (k.understeer == null && k.oversteer_m == null ? '<span class="muted">–</span>' : '<span class="badge good">clean</span>');
+}
+
+function renderCarControl(c) {
+  const rows = [];
+  const count = (f) => c.corners.filter(f).map((k) => k.title || k.name);
+  const os = count((k) => k.oversteer_m >= 4), us = count((k) => k.understeer > 1.3),
+    ws = count((k) => k.wheelspin_m_diff >= 6), ab = count((k) => k.abs_m_diff >= 10),
+    busy = count((k) => k.corrections_diff >= 3);
+  if (os.length) rows.push(`<li><b>Oversteer / slides:</b> ${os.map(esc).join(", ")}</li>`);
+  if (us.length) rows.push(`<li><b>Understeer:</b> ${us.map(esc).join(", ")}</li>`);
+  if (ws.length) rows.push(`<li><b>Wheelspin on exit:</b> ${ws.map(esc).join(", ")}</li>`);
+  if (ab.length) rows.push(`<li><b>Heavy on ABS:</b> ${ab.map(esc).join(", ")}</li>`);
+  if (busy.length) rows.push(`<li><b>Busy steering:</b> ${busy.map(esc).join(", ")}</li>`);
+  if (c.shifts) {
+    const d = c.shifts.diff_rpm;
+    rows.push(`<li><b>Upshifts:</b> ${c.shifts.me_rpm} rpm (reference ${c.shifts.ref_rpm}) – ` +
+      (Math.abs(d) < 200 ? "same shift points." : d < 0 ? `you short-shift by ~${-d} rpm${d < -400 ? " (fine when saving fuel)" : ""}.` : `you hold gears ~${d} rpm longer.`) + "</li>");
+  }
+  const wide = c.corners.filter((k) => k.line_apex_m > 1.5).map((k) => `${k.title || k.name} (+${k.line_apex_m.toFixed(1)} m)`);
+  if (wide.length) rows.push(`<li><b>Wide at the apex:</b> ${wide.map(esc).join(", ")}</li>`);
+  $("#cc-summary").innerHTML = rows.length ? `<ul class="tips-list">${rows.join("")}</ul>`
+    : '<span class="muted">No car-control problems found' + (c.corners.some((k) => k.understeer != null || k.oversteer_m != null) ? "." : " (these laps have no yaw/RPM/ABS channels).") + "</span>";
 }
 window.addEventListener("resize", () => { if (state.redrawAnalysis) state.redrawAnalysis(); });
 

@@ -95,6 +95,67 @@ The overlay starts with SimCoach. By default it only appears when you are **on t
 
 All feedback is measured against your reference lap, which must have telemetry: a Garage 61 lap, one of your recorded laps, or your session best. Turn-in is detected from steering angle, at 30% of the reference driver's peak steering in that corner.
 
+## Optimal lap
+
+**Laps → Build my optimal lap** takes your best version of every corner from all your clean laps on the track, plus imported teammate laps if you want, and stitches them into one reference lap with full telemetry.
+
+- The lap is cut on the straights between corners, where you're flat out, so the joins are smooth.
+- It shows how much faster this composite is than your best single lap. That's time you've already driven, just not all in one lap.
+- **Build & use as reference** chases it straight away.
+
+## Racing line and car control
+
+On **Analyse**, the **racing line** card compares your line with the reference using the GPS position iRacing records:
+
+- **Offset chart:** how far left or right of the reference line you are all round the lap.
+- **Line map:** both lines drawn together. Click a corner in the table to zoom in, with a 20 m scale bar.
+- **Per corner:** wide or tight at turn-in, apex and exit, for example *"2.4 m wide at the apex – get closer to the inside kerb"*.
+
+The **car-control** analysis compares you with the reference at the same place on track, so it needs no car settings:
+
+| Check | How it's detected |
+| --- | --- |
+| **Oversteer** | Opposite lock where the reference had none |
+| **Understeer** | More steering lock than the reference for the same or less rotation (yaw rate) |
+| **Wheelspin on exit** | RPM above the gear's normal RPM-to-speed ratio |
+| **ABS** | Metres with ABS working in the braking zone, against the reference |
+| **Busy steering** | Extra steering corrections |
+| **Gears** | Gear at the apex, and short-shifting (upshift RPM against the reference) |
+
+Results appear as badges in the corner table and as tips. *Racing line* and *Car control* are also added to the technique grades.
+
+## Progress and practice plans
+
+Every session is saved, per car and track. The **Progress** tab shows:
+
+- your best lap per session, against your personal best so far
+- technique grades over time
+- problems that keep coming back, such as *"T5: Braking too early (3 sessions)"*
+- corners that have improved
+
+**Make my practice plan** builds a plan for your next session that fits the time you have (30–90 min): warm-up, drills on your two costliest corners with a target and a focus cue, your weakest technique, a consistency run, and push laps against your optimal lap.
+
+## Race, endurance and fuel saving
+
+The **Race** tab is for longer races.
+
+**Live stint**
+- fuel left, fuel per lap and laps of fuel in the tank
+- laps to go (lap or timed races), fuel needed to finish, stops needed and the **pit window**
+- stint pace, the lap-time trend within the stint (s/lap), and consistency
+
+**Endurance planner**
+- Enter the race length, or let it use your live lap time, fuel use and tank size, plus your pit-stop time loss.
+- You get the number of stops, laps per stint and fuel per stop.
+- It also shows what saving fuel buys you: one stop fewer, or an extra lap per tank, with the **time cost against the time saved in the pits**.
+
+**Fuel saving – an extra lap without losing time**
+- **Save for one extra lap**, or enter litres per lap to save. SimCoach plans **lift-and-coast** points: the braking zones where lifting early saves the most fuel for the least time.
+- It's worked out from your own lap: your brake points, your fuel flow at full throttle, and your car's coast-down, fitted to the parts of the lap where you were off both pedals.
+- While it's on, the overlay shows **LIFT** instead of the brake cue, and the voice coach calls *"T1, lift 50 metres early"*.
+
+All fuel-saving figures are estimates and are labelled as such.
+
 ## Teammate lap files
 
 You can use a teammate's lap as your reference without Garage 61. They send you a file, and you upload it on the **Laps** tab:
@@ -197,6 +258,10 @@ python -m pytest tests           # run tests
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
 | `simcoach/ibt.py` | iRacing .ibt telemetry reader (teammate lap files) |
+| `simcoach/control.py` | Racing line (GPS) and car-control analysis |
+| `simcoach/optimal.py` | Optimal lap from your best corners |
+| `simcoach/history.py` | Session history, progress, practice plans |
+| `simcoach/race.py` | Stints, fuel, endurance planner, lift-and-coast planner |
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |

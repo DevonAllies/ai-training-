@@ -14,6 +14,8 @@
     <button class="tab active" data-tab="live">Live</button>
     <button class="tab" data-tab="laps">Laps</button>
     <button class="tab" data-tab="analyze">Analyse</button>
+    <button class="tab" data-tab="race">Race</button>
+    <button class="tab" data-tab="progress">Progress</button>
     <button class="tab" data-tab="sessions">Sessions</button>
     <button class="tab" data-tab="corners">Corners</button>
     <button class="tab" data-tab="settings">Settings</button>
@@ -119,6 +121,19 @@
 
 <!-- ============================== LAPS ============================== -->
 <section id="tab-laps" class="tab-page">
+  <div class="card">
+    <div class="label">My optimal lap – your best version of every corner, stitched into one reference</div>
+    <div class="filters">
+      <label class="check" style="flex-direction:row;align-items:center;gap:6px"><input id="opt-team" type="checkbox" checked> include teammate laps</label>
+      <button id="opt-build" class="primary">Build my optimal lap</button>
+      <button id="opt-build-ref">Build &amp; use as reference</button>
+    </div>
+    <p class="muted small-text">Uses your saved clean laps on the current track (and imported teammate laps). Each corner comes
+      from whichever lap was fastest there – full telemetry, lines and inputs you've actually driven.</p>
+    <div id="opt-msg" class="msg"></div>
+    <div id="opt-result"></div>
+  </div>
+
   <div class="card" id="tm-card">
     <div class="label">Teammate lap files – upload a lap and use it as your reference</div>
     <div id="tm-drop" class="dropzone">
@@ -212,16 +227,85 @@
         <canvas id="c-map" height="320"></canvas>
         <div id="map-none" class="muted hidden">No GPS data in these laps.</div>
       </div>
+      <div class="card wide" id="line-card">
+        <div class="label">Racing line vs reference <span class="muted">(+ = left of the reference line, metres)</span></div>
+        <canvas id="c-line" height="140"></canvas>
+        <div class="analyze-grid" style="margin-top:10px">
+          <div><div class="label">Lines – click a corner below to zoom</div><canvas id="c-lines" height="320"></canvas>
+            <div class="legend"><span class="sw me"></span>You <span class="sw ref"></span>Reference</div></div>
+          <div><div class="label">Car control &amp; gears</div><div id="cc-summary"></div></div>
+        </div>
+        <div id="line-none" class="muted hidden">No GPS (Lat/Lon) in one of these laps – racing line comparison needs it.</div>
+      </div>
       <div class="card wide">
         <div class="label">Corner by corner</div>
         <table class="tbl" id="corner-table">
-          <thead><tr><th>Corner</th><th>Time lost</th><th>Brake point</th><th>Turn-in</th><th>Apex speed</th><th>Exit speed</th><th>Full throttle</th><th>Coaching</th></tr></thead>
+          <thead><tr><th>Corner</th><th>Time lost</th><th>Brake point</th><th>Turn-in</th><th>Line at apex</th><th>Apex speed</th><th>Exit speed</th><th>Full throttle</th><th>Car</th><th>Coaching</th></tr></thead>
           <tbody></tbody>
         </table>
         <p class="muted small-text">Corners are numbered C1, C2… in order of speed minima on the reference lap
           and may not match official turn numbers. Brake point / turn-in / full throttle: + means later than the reference.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ============================== RACE ============================== -->
+<section id="tab-race" class="tab-page">
+  <div class="summary" id="race-cards"></div>
+  <div class="analyze-grid">
+    <div class="card">
+      <div class="label">Fuel saving – an extra lap without losing time</div>
+      <p class="muted small-text">Lift-and-coast before the braking zones where it costs the least time per litre. Lift points come
+        from your own last clean lap (your brake points, your car's coast-down and fuel flow) – estimates, shown as such.
+        When active, the overlay shows <b>LIFT</b> instead of the brake cue and the voice coach calls the lift.</p>
+      <div class="filters">
+        <button id="fs-extra" class="primary">Save for one extra lap</button>
+        <label>Or save per lap (L) <input id="fs-target" type="text" placeholder="0.10" style="width:80px"></label>
+        <button id="fs-target-go">Plan</button>
+        <button id="fs-off">Off</button>
+      </div>
+      <div id="fs-msg" class="msg"></div>
+      <div id="fs-plan"></div>
+    </div>
+    <div class="card">
+      <div class="label">Endurance planner</div>
+      <div class="filters">
+        <label>Race (minutes) <input id="ep-min" type="text" placeholder="360" style="width:80px"></label>
+        <label>or laps <input id="ep-laps" type="text" style="width:60px"></label>
+        <label>Lap time <input id="ep-lap" type="text" placeholder="auto" style="width:90px"></label>
+        <label>Fuel / lap (L) <input id="ep-fpl" type="text" placeholder="auto" style="width:80px"></label>
+        <label>Tank (L) <input id="ep-tank" type="text" placeholder="auto" style="width:70px"></label>
+        <label>Pit stop loss (s) <input id="ep-pit" type="text" value="60" style="width:70px"></label>
+        <button id="ep-go" class="primary">Plan race</button>
+      </div>
+      <div id="ep-msg" class="msg"></div>
+      <div id="ep-result"></div>
+    </div>
+    <div class="card wide">
+      <div class="label">Stint – lap times &amp; fuel</div>
+      <canvas id="c-stint" height="140"></canvas>
+      <table class="tbl" id="stint-table"><thead><tr><th>Lap</th><th>Stint</th><th>Time</th><th>Fuel used</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PROGRESS ============================ -->
+<section id="tab-progress" class="tab-page">
+  <div class="card">
+    <div class="filters">
+      <label>Car / track <select id="pg-combo"></select></label>
+      <label>Session length <select id="pg-min"><option>30</option><option selected>45</option><option>60</option><option>90</option></select> min</label>
+      <button id="pg-plan" class="primary">Make my practice plan</button>
+    </div>
+  </div>
+  <div class="analyze-grid">
+    <div class="card"><div class="label">Best lap per session <span class="muted">(green = personal best so far)</span></div><canvas id="c-pb" height="180"></canvas>
+      <div id="pg-chart-note" class="muted small-text hidden">The trend appears from your second session on this car/track.</div>
+      <div class="label">Technique grades per session</div><table class="tbl" id="pg-grades"></table></div>
+    <div class="card"><div class="label">Practice plan for your next session</div><div id="pg-plan-out"><span class="muted">Click "Make my practice plan".</span></div>
+      <div class="label" style="margin-top:12px">Keeps coming back</div><ul id="pg-recurring" class="tips-list"></ul>
+      <div class="label" style="margin-top:12px">Improved since your first session</div><ul id="pg-improved" class="tips-list"></ul></div>
   </div>
 </section>
 

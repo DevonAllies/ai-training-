@@ -132,5 +132,39 @@ const Charts = (() => {
     }
   }
 
-  return { line, trackMap, css };
+  /** Several lines on one map (e.g. your line vs the reference), optional zoom to a bin range. */
+  function trackLines(canvas, lines, opts = {}) {
+    const { ctx, w, h } = setup(canvas);
+    const base = lines.find((l) => l.lat && l.lon); if (!base) return;
+    const n = base.lat.length;
+    const [a, b] = opts.range || [0, n - 1];
+    const idx = []; for (let i = a; i <= b; i++) idx.push(((i % n) + n) % n);
+    const cosLat = Math.cos((base.lat.reduce((p, q) => p + q, 0) / n) * Math.PI / 180);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    lines.forEach((l) => idx.forEach((i) => {
+      const x = l.lon[i] * cosLat, y = l.lat[i];
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }));
+    const s = Math.min((w - 24) / (maxX - minX || 1e-9), (h - 24) / (maxY - minY || 1e-9));
+    const ox = (w - (maxX - minX) * s) / 2, oy = (h - (maxY - minY) * s) / 2;
+    const P = (l, i) => [ox + (l.lon[i] * cosLat - minX) * s, h - (oy + (l.lat[i] - minY) * s)];
+    lines.forEach((l) => {
+      ctx.strokeStyle = l.color; ctx.lineWidth = l.width || 2; ctx.lineCap = "round"; ctx.beginPath();
+      idx.forEach((i, k) => { const [x, y] = P(l, i); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
+    });
+    ctx.fillStyle = css("--text"); ctx.font = "11px Segoe UI, sans-serif";
+    (opts.labels || []).forEach((lab) => {
+      if (lab.i < a || lab.i > b) return;
+      const [x, y] = P(base, lab.i); ctx.fillText(lab.text, x + 6, y - 6);
+    });
+    if (opts.scaleM) {                       // scale bar
+      const metresPerDeg = 110540, px = (opts.scaleM / metresPerDeg) * s;
+      ctx.strokeStyle = css("--muted"); ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(10, h - 10); ctx.lineTo(10 + px, h - 10); ctx.stroke();
+      ctx.fillStyle = css("--muted"); ctx.fillText(opts.scaleM + " m", 14 + px, h - 6);
+    }
+  }
+
+  return { line, trackMap, trackLines, css };
 })();

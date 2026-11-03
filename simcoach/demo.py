@@ -33,6 +33,10 @@ class DriverStyle:
     accel_factor: dict       # corner index -> fraction of optimal acceleration on exit
     decel_factor: float = 1.0
     turn_in_late_m: dict = field(default_factory=dict)   # corner index -> metres late
+    countersteer_m: dict = field(default_factory=dict)   # corner index -> metres of slide on exit
+    wheelspin_m: dict = field(default_factory=dict)      # corner index -> metres of wheelspin on exit
+    abs_m: dict = field(default_factory=dict)            # corner index -> metres of ABS in braking
+    wide_apex_m: dict = field(default_factory=dict)      # corner index -> metres wide at the apex
 
 
 REFERENCE_STYLE = DriverStyle({}, {}, {})
@@ -42,7 +46,12 @@ YOU_STYLE = DriverStyle(
     accel_factor={6: 0.85, 0: 0.95},
     decel_factor=0.97,
     turn_in_late_m={1: 18.0, 6: 12.0},
+    countersteer_m={6: 25.0},
+    wheelspin_m={0: 30.0},
+    abs_m={2: 25.0},
+    wide_apex_m={4: 2.5},
 )
+FUEL_TANK_L = 60.0
 
 TURN_IN_BEFORE_APEX = 70.0   # metres: where the reference starts turning
 UNWIND_AFTER_APEX = 140.0    # metres to straighten the wheel
@@ -104,12 +113,67 @@ def track_map() -> tuple[np.ndarray, np.ndarray]:
     return lat, lon
 
 
+def _curvature(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    x = (lon - lon.mean()) * math.cos(math.radians(lat.mean())) * 111320.0
+    y = (lat - lat.mean()) * 110540.0
+    dx, dy = np.gradient(np.r_[x[-1], x, x[0]])[1:-1], np.gradient(np.r_[y[-1], y, y[0]])[1:-1]
+    ddx, ddy = np.gradient(np.r_[dx[-1], dx, dx[0]])[1:-1], np.gradient(np.r_[dy[-1], dy, dy[0]])[1:-1]
+    return (dx * ddy - dy * ddx) / np.maximum((dx * dx + dy * dy) ** 1.5, 1e-9)
+
+
+def car_channels(style: DriverStyle, v, thr, gear, steer, lat, lon):
+    """Yaw rate, lateral g, RPM, ABS and fuel for the demo car, plus planted car-control mistakes."""
+    x = GRID * TRACK_LENGTH
+    yaw = v * _curvature(lat, lon)
+    rpm = np.clip(v / (V_MAX / 6 * np.maximum(gear, 1)) * 8000, 3000, 8600)
+    abs_ = np.zeros(N_BINS)
+    steer = steer.copy()
+    for i, (pct, _) in enumerate(CORNERS):
+        apex = pct * TRACK_LENGTH
+        if style.countersteer_m.get(i):                # slide on exit: opposite lock, extra rotation
+            m = (x > apex + 20) & (x < apex + 20 + style.countersteer_m[i])
+            steer[m] = -0.35 * np.sign(steer[m] + 1e-9) * np.maximum(np.abs(steer[m]), 0.3)
+            yaw[m] *= 1.3
+        if style.wheelspin_m.get(i):                   # rpm flares above the gear ratio
+            m = (x > apex + 10) & (x < apex + 10 + style.wheelspin_m[i])
+            rpm[m] *= 1.15
+        if style.abs_m.get(i):
+            m = (x > apex - 10 - style.abs_m[i]) & (x < apex - 10)
+            abs_[m] = 1.0
+    dt = (TRACK_LENGTH / N_BINS) / np.maximum(v, 1)
+    fuel = FUEL_TANK_L - np.cumsum((0.002 + 0.045 * thr) * dt)
+    return dict(yaw=yaw, latacc=yaw * v, rpm=rpm, abs=abs_, fuel=fuel), steer
+
+
+def offset_line(style: DriverStyle, lat: np.ndarray, lon: np.ndarray):
+    """Move the driven line towards the outside around chosen apexes."""
+    if not style.wide_apex_m:
+        return lat, lon
+    k = _curvature(lat, lon)
+    x = (lon - lon.mean()) * math.cos(math.radians(lat.mean())) * 111320.0
+    y = (lat - lat.mean()) * 110540.0
+    tx, ty = np.gradient(np.r_[x[-1], x, x[0]])[1:-1], np.gradient(np.r_[y[-1], y, y[0]])[1:-1]
+    n = np.hypot(tx, ty)
+    nx, ny = -ty / n, tx / n                                   # left normal
+    pos = GRID * TRACK_LENGTH
+    off = np.zeros(N_BINS)
+    for i, metres in style.wide_apex_m.items():
+        apex = CORNERS[i][0] * TRACK_LENGTH
+        side = -np.sign(np.mean(k[max(0, int(CORNERS[i][0] * N_BINS) - 5): int(CORNERS[i][0] * N_BINS) + 6]))
+        off += side * metres * np.exp(-((pos - apex) / 60.0) ** 2)  # + left; outside = -curvature side
+    x2, y2 = x + off * nx, y + off * ny
+    lat2 = y2 / 110540.0 + lat.mean()
+    lon2 = x2 / (math.cos(math.radians(lat.mean())) * 111320.0) + lon.mean()
+    return lat2, lon2
+
+
 def make_lap(style: DriverStyle, label: str, jitter: float = 0.0, seed: int | None = None) -> Lap:
     v = speed_profile(style, jitter, seed)
     thr, brk, gear = controls_from_speed(v)
-    lat, lon = track_map()
+    lat, lon = offset_line(style, *track_map())
+    extra, steer = car_channels(style, v, thr, gear, steering_profile(style), lat, lon)
     lap = from_samples(GRID, v, thr, brk, track_length=TRACK_LENGTH, gear=gear,
-                       steer=steering_profile(style), lat=lat, lon=lon)
+                       steer=steer, lat=lat, lon=lon, **extra)
     lap.label = label
     lap.meta = {"track": "Demo Ring - GP", "car": "Demo GT3", "source": "demo"}
     return lap
