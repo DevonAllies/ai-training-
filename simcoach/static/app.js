@@ -391,15 +391,53 @@ $("#ep-go").addEventListener("click", async () => {
   msg($("#ep-msg"), "Planning…");
   try {
     const r = await api("/api/race/plan", { method: "POST", body: { race_minutes: num("#ep-min"), race_laps: num("#ep-laps"),
-      avg_lap: num("#ep-lap"), fuel_per_lap: num("#ep-fpl"), tank: num("#ep-tank"), pit_loss_s: num("#ep-pit") || 60 } });
+      avg_lap: num("#ep-lap"), fuel_per_lap: num("#ep-fpl"), tank: num("#ep-tank"), pit_loss_s: num("#ep-pit") || 60,
+      fuel_now: num("#ep-fuelnow") } });
     msg($("#ep-msg"), "");
-    $("#ep-result").innerHTML = `<p><b>${r.total_laps}</b> laps · <b>${r.stops}</b> stop(s) · ${r.laps_per_tank} laps per tank at ${fmtL(r.fuel_per_lap, 3)}/lap</p>
-      <p>Stints: ${r.stints.map((n, i) => `<span class="badge">${i + 1}: ${n} laps</span>`).join("")}</p>
+    const left = r.race_time_s ? `${Math.floor(r.race_time_s / 3600)}h ${String(Math.round((r.race_time_s % 3600) / 60)).padStart(2, "0")}m` : null;
+    $("#ep-result").innerHTML = `<p>${r.from_now ? `<b>From now</b> (${fmtL(r.fuel_now, 1)} in the tank${left ? ", " + left + " to go" : ""}): ` : ""}<b>${r.total_laps}</b> laps · <b>${r.stops}</b> stop(s) · ${r.laps_per_tank} laps per tank at ${fmtL(r.fuel_per_lap, 3)}/lap</p>
+      <p class="muted small-text">Fuel needed ${fmtL(r.fuel_needed, 1)} · margin at the flag ${fmtL(r.fuel_margin, 1)}</p>
+      <p>Stints: ${r.stints.map((n, i) => `<span class="badge">${i === 0 && r.from_now ? "now" : i + 1}: ${n} laps</span>`).join("")}</p>
       ${r.fuel_per_stop.length ? `<p class="muted small-text">Fuel per stop: ${r.fuel_per_stop.map((f) => f + " L").join(", ")}</p>` : ""}
       <div class="label">What fuel saving buys you</div>` + (r.options.map((o) => `<div class="plan-step"><b>${esc(o.name)}</b>
         save ${fmtL(o.save_per_lap, 3)}/lap (${o.save_pct}%)${o.time_cost_per_lap_s != null ? ` · costs ~${o.time_cost_per_lap_s.toFixed(3)} s/lap (${o.time_cost_race_s.toFixed(0)} s over the race)` : ""}
         ${o.net_gain_s != null ? `<br><span class="${o.net_gain_s > 0 ? "neg" : "pos"}">Net ${o.net_gain_s > 0 ? "gain" : "loss"}: ${Math.abs(o.net_gain_s).toFixed(0)} s vs making the extra stop</span>` : ""}</div>`).join("") || '<span class="muted">No useful saving option.</span>');
   } catch (e) { msg($("#ep-msg"), e.message, "err"); }
+});
+
+// planner sources: live session / Garage 61 / imported export
+async function planSources(scope) {
+  const q = new URLSearchParams({ scope: scope || "me" });
+  if ($("#f-car") && $("#f-car").value) q.set("car", $("#f-car").value);
+  if ($("#f-track") && $("#f-track").value) q.set("track", $("#f-track").value);
+  return api("/api/race/sources?" + q);
+}
+const setIf = (id, v, fmt) => { if (v != null && v !== "") $(id).value = fmt ? fmt(v) : v; };
+$("#ep-src-live").addEventListener("click", async () => {
+  const s = (await planSources()).live;
+  if (!s) { msg($("#ep-src-msg"), "No live session – start iRacing and drive a lap or two.", "err"); return; }
+  if (s.time_left_s) { $("#ep-min").value = Math.round(s.time_left_s / 60); $("#ep-laps").value = ""; }
+  else if (s.laps_left) { $("#ep-laps").value = Math.round(s.laps_left); $("#ep-min").value = ""; }
+  setIf("#ep-lap", s.lap_time, fmtTime); setIf("#ep-fpl", s.fuel_per_lap, (v) => v.toFixed(3));
+  setIf("#ep-tank", s.tank, (v) => v.toFixed(1)); setIf("#ep-fuelnow", s.fuel_now, (v) => v.toFixed(1));
+  msg($("#ep-src-msg"), `Live: ${s.time_left_s ? Math.round(s.time_left_s / 60) + " min left" : s.laps_left ? s.laps_left + " laps left" : "no race clock"}` +
+    `, ${s.fuel_now ? s.fuel_now.toFixed(1) + " L in the tank" : "fuel unknown"}${s.lap_time ? "" : " – drive a few laps for pace and fuel/lap"}.`, "ok");
+});
+$("#ep-src-g61").addEventListener("click", async () => {
+  msg($("#ep-src-msg"), "Asking Garage 61…");
+  const g = (await planSources($("#ep-g61-scope").value)).garage61;
+  if (!g || g.error) { msg($("#ep-src-msg"), g ? g.error : "Garage 61 not available", "err"); return; }
+  if (!g.laps) { msg($("#ep-src-msg"), "Garage 61 has no laps for this car/track yet.", "err"); return; }
+  setIf("#ep-lap", g.lap_time, fmtTime); setIf("#ep-fpl", g.fuel_per_lap, (v) => v.toFixed(3));
+  msg($("#ep-src-msg"), `Garage 61 (${g.scope === "me" ? "your" : "your + teammates'"} laps): race pace ${fmtTime(g.lap_time)} from ${g.laps} clean laps within 3 % of the best (${fmtTime(g.best)})` +
+    (g.fuel_per_lap ? `, fuel ${g.fuel_per_lap.toFixed(3)} L/lap from ${g.fuel_laps} laps.` : `. ${g.note}`), g.fuel_per_lap ? "ok" : "");
+});
+$("#ep-src-export").addEventListener("click", async () => {
+  const e = (await planSources()).export;
+  if (!e) { msg($("#ep-src-msg"), "No imported session for this track – import a Garage 61 export on the Sessions tab.", "err"); return; }
+  setIf("#ep-lap", e.lap_time, fmtTime); setIf("#ep-fpl", e.fuel_per_lap, (v) => v.toFixed(3));
+  msg($("#ep-src-msg"), `Imported session ${esc((e.date || "").slice(0, 10))} (${esc(e.car)}): race pace ${fmtTime(e.lap_time)} from ${e.laps} laps` +
+    (e.fuel_per_lap ? `, fuel ${e.fuel_per_lap.toFixed(3)} L/lap.` : "."), "ok");
 });
 
 // ------------------------------------------------------------ progress

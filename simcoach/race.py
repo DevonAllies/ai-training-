@@ -108,10 +108,27 @@ class RaceTracker:
         return out
 
 
+# ------------------------------------------------------------------ pace & fuel stats
+def pace_stats(laps: list[dict], window: float = 1.03) -> dict:
+    """Race pace from a set of laps: median of clean laps within `window` of the best
+    (not the single best lap - that's not what you'll average in a stint), and the median
+    fuel used on those laps.  laps: [{"lap_time", "fuel_used", "clean"}]"""
+    times = [l for l in laps if l.get("lap_time") and l.get("clean", True)]
+    if not times:
+        return {"lap_time": None, "fuel_per_lap": None, "laps": 0, "fuel_laps": 0}
+    best = min(l["lap_time"] for l in times)
+    pool = [l for l in times if l["lap_time"] <= best * window]
+    fuel = [l["fuel_used"] for l in pool if l.get("fuel_used")] or \
+           [l["fuel_used"] for l in times if l.get("fuel_used")]
+    return {"lap_time": round(statistics.median(l["lap_time"] for l in pool), 3), "best": round(best, 3),
+            "fuel_per_lap": round(statistics.median(fuel), 3) if fuel else None,
+            "laps": len(pool), "fuel_laps": len(fuel)}
+
+
 # ------------------------------------------------------------------ endurance plan
 def plan_race(avg_lap: float, fuel_per_lap: float, tank: float, race_time_s: float | None = None,
               race_laps: int | None = None, pit_loss_s: float = 60.0, refuel_rate_lps: float | None = None,
-              lift_cost_per_litre: float | None = None) -> dict:
+              lift_cost_per_litre: float | None = None, fuel_now: float | None = None) -> dict:
     """Stint plan + what fuel saving would buy.
 
     lift_cost_per_litre: seconds lost per litre saved by lift-and-coast (from lift_plan),
@@ -126,15 +143,25 @@ def plan_race(avg_lap: float, fuel_per_lap: float, tank: float, race_time_s: flo
     else:
         raise ValueError("Give the race length in laps or minutes.")
     per_tank = max(1, math.floor(tank / fuel_per_lap))
-    stints_n = int(math.ceil(total / per_tank))
-    stops = stints_n - 1
-    base = total // stints_n
-    extra = total % stints_n
-    stints = [base + (1 if i < extra else 0) for i in range(stints_n)]
+    if fuel_now is not None and fuel_now >= 0:
+        # plan from now: the first stint is whatever the fuel in the tank covers
+        first = min(total, math.floor(fuel_now / fuel_per_lap))
+        rest = total - first
+        n_more = int(math.ceil(rest / per_tank)) if rest > 0 else 0
+        stints = [first] + ([rest // n_more + (1 if i < rest % n_more else 0) for i in range(n_more)] if n_more else [])
+        stops = n_more
+    else:
+        stints_n = int(math.ceil(total / per_tank))
+        stops = stints_n - 1
+        base, extra = total // stints_n, total % stints_n
+        stints = [base + (1 if i < extra else 0) for i in range(stints_n)]
     fuel_stops = [round(min(tank, laps * fuel_per_lap + 0.5 * fuel_per_lap), 1) for laps in stints[1:]]
+    available = (fuel_now if fuel_now is not None and fuel_now >= 0 else tank) + stops * tank
     out = {"total_laps": total, "laps_per_tank": per_tank, "stops": stops, "stints": stints,
            "fuel_per_stop": fuel_stops, "fuel_per_lap": fuel_per_lap, "tank": tank,
-           "pit_loss_s": pit_loss_s, "options": []}
+           "pit_loss_s": pit_loss_s, "options": [], "from_now": fuel_now is not None,
+           "fuel_now": fuel_now, "race_time_s": race_time_s,
+           "fuel_needed": round(total * fuel_per_lap, 1), "fuel_margin": round(available - total * fuel_per_lap, 1)}
     if refuel_rate_lps:
         out["refuel_time_s"] = [round(f / refuel_rate_lps, 1) for f in fuel_stops]
 
@@ -156,8 +183,9 @@ def plan_race(avg_lap: float, fuel_per_lap: float, tank: float, race_time_s: flo
         out["options"].append(o)
 
     if stops >= 1:                                     # one stop fewer
-        need_per_tank = math.ceil(total / stops)
-        option(f"One stop fewer ({stops - 1} stops)", tank / need_per_tank, True)
+        start_fuel = fuel_now if fuel_now is not None and fuel_now >= 0 else tank
+        option(f"One stop fewer ({stops - 1} stop{'s' if stops - 1 != 1 else ''})",
+               (start_fuel + (stops - 1) * tank) / total, True)
     option("One extra lap per tank", tank / (per_tank + 1), False, 1)
     return out
 

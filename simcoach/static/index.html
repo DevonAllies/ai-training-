@@ -271,12 +271,20 @@
     <div class="card">
       <div class="label">Endurance planner</div>
       <div class="filters">
+        <button id="ep-src-live" class="small">Fill from live session</button>
+        <button id="ep-src-g61" class="small">Fill from Garage 61</button>
+        <select id="ep-g61-scope" class="small"><option value="me">my laps</option><option value="team">me + teammates</option></select>
+        <button id="ep-src-export" class="small">Fill from imported session</button>
+      </div>
+      <div id="ep-src-msg" class="msg small-text"></div>
+      <div class="filters">
         <label>Race (minutes) <input id="ep-min" type="text" placeholder="360" style="width:80px"></label>
         <label>or laps <input id="ep-laps" type="text" style="width:60px"></label>
         <label>Lap time <input id="ep-lap" type="text" placeholder="auto" style="width:90px"></label>
         <label>Fuel / lap (L) <input id="ep-fpl" type="text" placeholder="auto" style="width:80px"></label>
         <label>Tank (L) <input id="ep-tank" type="text" placeholder="auto" style="width:70px"></label>
         <label>Pit stop loss (s) <input id="ep-pit" type="text" value="60" style="width:70px"></label>
+        <label>Fuel in tank now (L) <input id="ep-fuelnow" type="text" placeholder="full" style="width:80px"></label>
         <button id="ep-go" class="primary">Plan race</button>
       </div>
       <div id="ep-msg" class="msg"></div>

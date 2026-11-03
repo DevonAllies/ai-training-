@@ -65,6 +65,7 @@ class RacePlanIn(BaseModel):
     fuel_per_lap: float | None = None
     tank: float | None = None
     pit_loss_s: float = 60.0
+    fuel_now: float | None = None      # plan from now: fuel already in the tank
 
 
 class FuelSaveIn(BaseModel):
@@ -480,9 +481,70 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             cost = lp.get("cost_per_litre_s")
         try:
             return plan_race(avg, fpl, tank, race_time_s=(body.race_minutes or 0) * 60 or None,
-                             race_laps=body.race_laps, pit_loss_s=body.pit_loss_s, lift_cost_per_litre=cost)
+                             race_laps=body.race_laps, pit_loss_s=body.pit_loss_s, lift_cost_per_litre=cost,
+                             fuel_now=body.fuel_now)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/race/sources")
+    def race_sources(car: int | None = None, track: int | None = None, scope: str = "me"):
+        """Lap time + fuel per lap for the planner from Garage 61, imported exports and the live session."""
+        from .race import pace_stats
+        out: dict = {"live": None, "garage61": None, "export": None}
+        # live session: time left, fuel in the tank, current pace
+        st = engine.race_status()
+        s = engine.last_sample or {}
+        tl = s.get("time_remain", -1.0)
+        ll = s.get("laps_remain", -1.0)
+        if engine.connected and s:
+            out["live"] = {"time_left_s": tl if tl is not None and tl > 0 else None,
+                           "laps_left": ll if ll is not None and 0 <= ll < 30000 else None,
+                           "fuel_now": s.get("fuel") or None, "tank": st.get("tank"),
+                           "lap_time": st.get("stint_avg"), "fuel_per_lap": st.get("fuel_per_lap"),
+                           "session_type": st.get("session_type")}
+        # Garage 61: your laps (or the team's) in this car at this track
+        try:
+            g = g61()
+            car_id, track_id = car, track
+            if (car_id is None or track_id is None) and engine.session:
+                if car_id is None:
+                    m = g.match_car(engine.session.get("car", ""))
+                    car_id = m.get("id") if m else None
+                if track_id is None:
+                    m = g.match_track(engine.session.get("track", ""), engine.session.get("track_config", ""))
+                    track_id = m.get("id") if m else None
+            if car_id and track_id:
+                laps = g.find_laps(cars=[car_id], tracks=[track_id], drivers=["me"] if scope == "me" else None,
+                                   group="none", telemetry_required=False, limit=300)
+                rows = [describe_lap(l) for l in laps]
+                stats = pace_stats([{"lap_time": r["lap_time"], "fuel_used": r["fuel_used"],
+                                     "clean": r.get("clean", True)} for r in rows])
+                out["garage61"] = dict(stats, scope=scope, car_id=car_id, track_id=track_id,
+                                       note=None if stats["fuel_per_lap"] else
+                                       "Garage 61 returned lap times but no fuel figures for these laps.")
+            else:
+                out["garage61"] = {"error": "Pick the car and track on the Laps tab (or be in a session) "
+                                            "to fetch Garage 61 laps."}
+        except Garage61Error as exc:
+            out["garage61"] = {"error": str(exc)}
+        # imported Garage 61 session exports (have fuel used per lap)
+        track_name = engine.track_name()
+        best_exp = None
+        for item in sessions.list_imports():
+            if track_name and not _same_track(engine.session or {"track": track_name}, item.get("track", ""), 0.3):
+                continue
+            try:
+                data = sessions.load_import(item["id"])
+            except (OSError, ValueError):
+                continue
+            laps = [l for sess in data.get("sessions", []) for l in sess.get("laps", [])
+                    if not l.get("pit_in") and not l.get("pit_out") and all(x is not None for x in l.get("sectors", []))]
+            stats = pace_stats([{"lap_time": l["lap_time"], "fuel_used": l.get("fuel_used"),
+                                 "clean": l.get("clean", True)} for l in laps])
+            if stats["laps"] and (best_exp is None or stats["laps"] > best_exp["laps"]):
+                best_exp = dict(stats, track=data.get("track"), car=data.get("car"), date=data.get("date"))
+        out["export"] = best_exp
+        return out
 
     @app.post("/api/fuelsave")
     def fuel_save(body: FuelSaveIn):

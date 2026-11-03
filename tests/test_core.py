@@ -728,3 +728,56 @@ def test_gps_precision_survives_save_and_json(tmp_path):
     assert float(np.max(np.abs(np.array(j["lat"]) - ref.lat))) * 110540 < 0.01
     cmp = compare_laps(Lap.load(p), ref)
     assert max(abs(c.line_apex_m) for c in cmp.corners) < 0.2   # same lap -> on the line everywhere
+
+
+# ------------------------------------------------- v8: planner from Garage 61 / live / exports
+def test_g61_fuel_and_pace_stats():
+    from simcoach.race import pace_stats
+    assert describe_lap({"lapTime": 219.0, "fuelUsed": 7.02})["fuel_used"] == 7.02
+    assert describe_lap({"lapTime": 219.0, "fuel": {"used": 6.9}})["fuel_used"] == 6.9
+    assert describe_lap({"lapTime": 219.0})["fuel_used"] is None
+    st = pace_stats([{"lap_time": 218.6, "fuel_used": 7.0}, {"lap_time": 219.3, "fuel_used": 7.06},
+                     {"lap_time": 246.3, "fuel_used": 6.8},            # traffic/incident lap: excluded
+                     {"lap_time": 219.0, "fuel_used": None, "clean": True},
+                     {"lap_time": 210.0, "fuel_used": 9.0, "clean": False}])   # unclean: excluded
+    assert st["lap_time"] == 219.0 and st["best"] == 218.6 and st["laps"] == 3
+    assert st["fuel_per_lap"] == pytest.approx(7.03) and st["fuel_laps"] == 2
+
+
+def test_plan_from_now_uses_fuel_in_tank():
+    from simcoach.race import plan_race
+    full = plan_race(220, 7.0, 75, race_time_s=3 * 3600)
+    now = plan_race(220, 7.0, 75, race_time_s=3 * 3600, fuel_now=40)
+    assert sum(now["stints"]) == now["total_laps"] == full["total_laps"] == 50
+    assert now["stints"][0] == 5 and all(n <= 10 for n in now["stints"][1:])
+    assert now["stops"] == len(now["stints"]) - 1 and now["fuel_margin"] >= 0
+    opt = next(o for o in now["options"] if o["saves_stop"])
+    # with the saving, fuel now + one stop fewer of full tanks covers the race
+    assert 40 + (now["stops"] - 1) * 75 >= opt["target_fuel_per_lap"] * now["total_laps"] - 1e-6
+
+
+def test_race_sources_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    from simcoach import garage61, sessions
+    from simcoach.server import create_app
+    sessions.import_file(SAMPLE)                      # Le Mans export with fuel used per lap
+    calls = {}
+
+    def fake_find(self, **kw):
+        calls.update(kw)
+        return [{"lapTime": 219.0 + i * 0.1, "fuelUsed": 7.0 + i * 0.01, "driver": {"firstName": "Devon"}}
+                for i in range(8)]
+    monkeypatch.setattr(garage61.Garage61Client, "find_laps", fake_find)
+    cfg = Config(garage61_token="x")
+    eng = LiveEngine(cfg, DemoSource())
+    client = TestClient(create_app(eng, cfg))
+    r = client.get("/api/race/sources", params={"car": 1, "track": 2, "scope": "me"}).json()
+    g = r["garage61"]
+    assert g["laps"] == 8 and g["lap_time"] == pytest.approx(219.35) and g["fuel_per_lap"] == pytest.approx(7.035)
+    assert calls["drivers"] == ["me"] and calls["cars"] == [1] and calls["group"] == "none"
+    e = r["export"]
+    assert e and e["car"] == "Dallara P217" and 218 < e["lap_time"] < 221 and 6.5 < e["fuel_per_lap"] < 7.5
+    plan = client.post("/api/race/plan", json={"race_minutes": 360, "avg_lap": g["lap_time"],
+                                               "fuel_per_lap": g["fuel_per_lap"], "tank": 75,
+                                               "fuel_now": 30}).json()
+    assert plan["from_now"] and plan["stints"][0] == 4 and sum(plan["stints"]) == plan["total_laps"]

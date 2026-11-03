@@ -196,4 +196,22 @@ def describe_lap(lap: dict) -> dict:
         "session_type": lap.get("sessionType"),
         "can_view_telemetry": lap.get("canViewTelemetry", True),
         "is_me": bool(lap.get("isMe") or drv.get("isMe")),
+        "fuel_used": _fuel_used(lap),
+        "clean": lap.get("clean", lap.get("isClean", True)),
     }
+
+
+def _fuel_used(lap: dict) -> float | None:
+    """Fuel used in the lap (litres). Garage 61 can filter laps by fuel used, so lap records
+    carry it; read the likely field names defensively and return None if absent."""
+    for key in ("fuelUsed", "fuel_used", "fuelUse", "fuelConsumption"):
+        v = lap.get(key)
+        if isinstance(v, (int, float)) and v > 0:
+            return float(v)
+    fuel = lap.get("fuel")
+    if isinstance(fuel, dict):
+        for key in ("used", "consumed", "usage"):
+            v = fuel.get(key)
+            if isinstance(v, (int, float)) and v > 0:
+                return float(v)
+    return None

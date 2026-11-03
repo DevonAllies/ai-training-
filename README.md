@@ -145,7 +145,11 @@ The **Race** tab is for longer races.
 - stint pace, the lap-time trend within the stint (s/lap), and consistency
 
 **Endurance planner**
-- Enter the race length, or let it use your live lap time, fuel use and tank size, plus your pit-stop time loss.
+- Fill it in one click from:
+  - **Live session:** time left (or laps left), fuel in the tank, tank size, your current pace and fuel per lap.
+  - **Garage 61:** race pace and fuel per lap from *your* laps, or your team's, in this car at this track. Race pace is the median of clean laps within 3 % of the best, not your single fastest lap, because that's what you'll actually average over a stint.
+  - **Imported session:** the same figures from a Garage 61 Excel export, which includes fuel used per lap.
+- With **Fuel in tank now** filled, it plans **from now**: the first stint is what's in the tank, then full stints to the flag. It also shows the fuel needed and the margin at the flag.
 - You get the number of stops, laps per stint and fuel per stop.
 - It also shows what saving fuel buys you: one stop fewer, or an extra lap per tank, with the **time cost against the time saved in the pits**.
 
