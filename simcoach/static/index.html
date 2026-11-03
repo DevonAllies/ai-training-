@@ -401,6 +401,20 @@
     <label class="block">Corner drill target (seconds within reference)
       <input id="s-focus-target" type="text" inputmode="decimal"></label>
     <div class="actions"><button id="btn-voice-test" class="small">Test voice</button></div>
+    <h3>Tablet / phone</h3>
+    <p class="muted">Use a tablet or phone next to your rig as a second screen. It must be on the same home Wi-Fi.
+      Devices on your network can use the coaching screens but can't change settings or delete anything.</p>
+    <label class="check"><input id="s-lan" type="checkbox"> Allow my tablet/phone on my home network</label>
+    <div id="lan-box" class="hidden">
+      <div id="lan-restart" class="msg hidden">Restart SimCoach to apply. <button id="btn-restart" class="small primary">Restart now</button></div>
+      <div id="lan-ready" class="hidden">
+        <p>Scan with your tablet/phone camera, or type the address:</p>
+        <div class="lan-qr"><img id="lan-qr" alt="QR code"></div>
+        <select id="lan-url" class="small"></select>
+        <p class="muted small-text">Windows may ask once whether to allow SimCoach on networks – allow it for <b>private</b>
+          networks only. If the page doesn't open on the tablet, try the other address in the list.</p>
+      </div>
+    </div>
     <h3>Updates</h3>
     <p class="muted">SimCoach is one self-contained app (Python and all libraries are built in). It checks GitHub for new
       versions, verifies the download and installs it for you – never while you're on track.</p>

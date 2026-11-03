@@ -55,7 +55,12 @@ Your laps and settings are kept across updates.
 
 Install Python 3.10+ (tick "Add python.exe to PATH"), then run `install.bat` once and `run.bat` to start. `build_exe.bat` builds `SimCoach.exe`, and the installer too if [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed.
 
-**Tip:** run `SimCoach.exe --host 0.0.0.0` to open the dashboard on a tablet or phone next to your rig at `http://<your-pc-ip>:8061`.
+**Second screen:** drag the dashboard to another monitor and press **F11** for full screen. To use a **tablet or phone** next to your rig:
+
+1. Switch on **Settings → Tablet / phone → Allow my tablet/phone on my home network** and click **Restart now**.
+2. Scan the **QR code** with the tablet's camera, or type the address shown.
+
+Devices on your network can use the coaching screens, but only this PC can change settings, quit or delete anything. Windows may ask once whether to allow SimCoach on networks; allow **private** networks only.
 
 ### Releases (maintainers)
 
@@ -267,6 +272,7 @@ python -m pytest tests           # run tests
 | `simcoach/history.py` | Session history, progress, practice plans |
 | `simcoach/race.py` | Stints, fuel, endurance planner, lift-and-coast planner |
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
+| `simcoach/lan.py` | Tablet/phone access on the home network (QR code, settings guard) |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |
 | `packaging/` | PyInstaller spec, Inno Setup installer script, icon |

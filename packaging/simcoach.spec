@@ -11,7 +11,7 @@ ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 hidden = (
     collect_submodules("uvicorn")
     + ["irsdk", "yaml", "pyttsx3", "pyttsx3.drivers", "pyttsx3.drivers.sapi5", "comtypes.client",
-       "pystray", "pystray._win32", "PIL.Image", "openpyxl"]
+       "pystray", "pystray._win32", "PIL.Image", "openpyxl", "qrcode", "qrcode.image.svg"]
 )
 
 a = Analysis(

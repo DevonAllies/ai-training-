@@ -125,8 +125,9 @@ def main(argv: list[str] | None = None) -> None:
 
     ap = argparse.ArgumentParser(prog="simcoach", description="iRacing training coach with Garage 61")
     ap.add_argument("--port", type=int, default=8061)
-    ap.add_argument("--host", default="127.0.0.1",
-                    help="Use 0.0.0.0 to view the dashboard from a tablet/phone on your network")
+    ap.add_argument("--host", default=None,
+                    help="Listen address (default: this PC only, or your network when "
+                         "'Allow my tablet/phone' is on in Settings). 0.0.0.0 = whole network")
     ap.add_argument("--demo", action="store_true", help="Simulated driver instead of iRacing")
     ap.add_argument("--demo-speed", type=float, default=1.0, help=argparse.SUPPRESS)
     ap.add_argument("--no-browser", action="store_true", help="Don't open the dashboard")
@@ -198,8 +199,14 @@ def main(argv: list[str] | None = None) -> None:
         spawn_detached(relaunch_command(args.port, demo=False))
         threading.Timer(0.5, quit_all).start()
 
+    def restart_app():
+        spawn_detached(relaunch_command(args.port, demo=args.demo))
+        threading.Timer(0.5, quit_all).start()
+
+    host = args.host or ("0.0.0.0" if config.lan_access else "127.0.0.1")
     app = create_app(engine, config, demo_mode=args.demo, updater=updater,
-                     on_quit=lambda: threading.Timer(0.3, quit_all).start(), on_restart_live=restart_live)
+                     on_quit=lambda: threading.Timer(0.3, quit_all).start(), on_restart_live=restart_live,
+                     on_restart=restart_app, bind_host=host, port=args.port)
     engine.on_session_change = auto_sector_targets
     engine.start()
     if not args.no_update and not args.demo:
@@ -212,7 +219,10 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
-    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port,
+    if host != "127.0.0.1":
+        from .lan import lan_urls
+        log.info("Dashboard on your network: %s", ", ".join(lan_urls(args.port)))
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=args.port,
                                            log_level="warning", log_config=None))
     server_ref["server"] = server
 

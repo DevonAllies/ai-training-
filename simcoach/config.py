@@ -59,6 +59,8 @@ class Config:
     focus_target: float = 0.05
     # Keep a history of every session (for the Progress tab)
     record_history: bool = True
+    # Let a tablet/phone on the home network open the dashboard (needs a restart to apply)
+    lan_access: bool = False
     # Updates from GitHub Releases: "auto" (install when not driving), "notify" or "off"
     update_mode: str = "auto"
     update_repo: str = "DevonAllies/ai-training-"

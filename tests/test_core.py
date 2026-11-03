@@ -781,3 +781,33 @@ def test_race_sources_endpoint(monkeypatch):
                                                "fuel_per_lap": g["fuel_per_lap"], "tank": 75,
                                                "fuel_now": 30}).json()
     assert plan["from_now"] and plan["stints"][0] == 4 and sum(plan["stints"]) == plan["total_laps"]
+
+
+# ------------------------------------------------------------- v9: tablet / phone (LAN + QR)
+def test_lan_guard_qr_and_status():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config()
+    eng = LiveEngine(cfg, DemoSource())
+    app = create_app(eng, cfg, demo_mode=True, bind_host="0.0.0.0", port=8061)
+    local, tablet = TestClient(app), TestClient(app, client=("192.168.1.50", 5000))
+    # the tablet can use the coaching screens...
+    assert tablet.get("/").status_code == 200 and tablet.get("/api/status").status_code == 200
+    assert tablet.post("/api/coach/focus", json={"action": "auto"}).status_code == 200
+    # ...but not change settings, quit, restart or delete
+    assert tablet.post("/api/config", json={"units": "imperial"}).status_code == 403
+    assert tablet.post("/api/quit").status_code == 403 and tablet.post("/api/restart").status_code == 403
+    assert tablet.delete("/api/local/laps/x.csv").status_code == 403
+    assert local.post("/api/config", json={"units": "metric"}).status_code == 200
+    st = tablet.get("/api/lan").json()
+    assert st["active"] and st["viewer_is_remote"] and st["port"] == 8061
+    # toggling the setting on a localhost-only server asks for a restart
+    app2 = create_app(eng, cfg, bind_host="127.0.0.1")
+    c2 = TestClient(app2)
+    assert c2.post("/api/config", json={"lan_access": True}).json()["lan_access"] is True
+    s2 = c2.get("/api/lan").json()
+    assert s2["enabled"] and not s2["active"] and s2["needs_restart"]
+    cfg.lan_access = False
+    svg = local.get("/api/lan/qr.svg", params={"url": "http://192.168.1.20:8061/"})
+    assert svg.status_code == 200 and svg.headers["content-type"].startswith("image/svg") and "<svg" in svg.text
+    assert local.get("/api/lan/qr.svg", params={"url": "javascript:alert(1)"}).status_code == 400
