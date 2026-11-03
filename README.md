@@ -8,6 +8,10 @@ SimCoach is a local app for the PC that runs iRacing. It:
 - **Analyses laps after the session.** It shows delta, speed, throttle and brake traces, a track map coloured red where you lose time and green where you gain it, and a corner table. The table compares brake point, apex speed, exit speed, full-throttle point and coasting, and gives ranked coaching tips.
 - **Shows an in-game overlay while you practise.** A small always-on-top window over iRacing tells you, corner by corner, whether you **braked too early**, **carried too little minimum speed**, **turned in too late** or **got on the throttle late**. It also shows a *brake in 120 m → BRAKE* cue at the reference braking point, your live delta, and sector deltas.
 - **Imports Garage 61 session exports (.xlsx).** It shows best and theoretical-best laps, consistency, and how much time each sector costs you. Your best sectors become live sector targets for the same car and track.
+- **Voice coach that doesn't nag.** Before each corner it speaks *one* short reminder based on what you did there last lap (*"C3, brake later"*), and tells you when you've fixed it. There's an optional detailed mode that also says the time lost or gained.
+- **Technique grades (0–100)** for braking, turn-in, trail braking, minimum speed and throttle, plus overall pace, for every lap.
+- **Corner drill mode.** The coach picks the corner where you lose the most time and focuses all feedback on it. It moves on once you're within the target for 3 laps in a row.
+- **Session report.** Covers every lap you've driven: average and best time lost per corner, consistency, the mistake you repeat most in each corner, technique trends, and how much time is available by repeating your *own* best corners.
 - **Records every clean lap** you drive to `%APPDATA%\SimCoach\laps`, so you can compare against your own past laps too.
 
 Everything runs on your PC. The dashboard is a local web page at `http://127.0.0.1:8061`.
@@ -77,6 +81,16 @@ Example from the included export (race, 9 laps used): the best lap is 3:38.637 a
 
 If no reference is selected, SimCoach uses your session best as the reference.
 
+## Design notes
+
+- **Local and private.** Telemetry, laps and settings stay on your PC. No account, no subscription, no upload. Garage 61 is only contacted to fetch laps you ask for.
+- **Your data and your team's.** References can be your own laps, your session best, or laps from Garage 61 teammates and drivers you follow, not only stock "pro" laps.
+- **Explains why, not only where.** Each corner is broken down into brake point, brake pressure, turn-in, trail braking, minimum speed, coasting, throttle pick-up and exit speed. The tips are ranked by time lost.
+- **Coaches the next attempt, not the last one.** Feedback is timed for when you can act on it: a cue before the corner and a summary after it.
+- **Light on your rig.** The live engine uses about 2% of one CPU core at 60 Hz. All session history is held in fixed-size buffers, so memory stays flat over long stints. An automated soak test checks this.
+
+SimCoach is an independent project. All code is original and it isn't affiliated with any other coaching product.
+
 ## How the comparison works
 
 - Each lap is resampled onto 1000 points over lap distance, so laps line up exactly by track position.
@@ -108,6 +122,8 @@ python -m pytest tests           # run tests
 | `simcoach/lap.py` | Lap model, resampling, CSV import/export |
 | `simcoach/analysis.py` | Corner detection, delta, coaching tips |
 | `simcoach/live.py` | iRacing telemetry (pyirsdk), live lap builder, live delta, corner phase events, sectors |
+| `simcoach/coach.py` | Session report, corner drill, voice cue logic |
+| `simcoach/voice.py` | Text-to-speech output (Windows SAPI via pyttsx3) + browser voice log |
 | `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |

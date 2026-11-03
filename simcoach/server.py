@@ -38,6 +38,15 @@ class TokenIn(BaseModel):
     overlay_mode: str | None = None
     overlay_scale: float | None = None
     overlay_opacity: float | None = None
+    voice_mode: str | None = None
+    voice_native: bool | None = None
+    voice_practice_only: bool | None = None
+    focus_target: float | None = None
+
+
+class FocusIn(BaseModel):
+    action: str = "auto"               # "auto" | "corner" | "stop"
+    corner: int | None = None
 
 
 class TargetsIn(BaseModel):
@@ -97,6 +106,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
         else:
             text = g61_call(g61().lap_csv, lap_id)
             cache.write_text(text, encoding="utf-8")
+            _prune_cache()
         track_len = 0.0
         sess = engine.session
         if sess.get("track_length") and d.get("track") and _same_track(sess, d["track"]):
@@ -129,6 +139,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
     def set_config(body: TokenIn):
         if body.garage61_token is not None:
             config.garage61_token = body.garage61_token.strip()
+            state["g61"].close()
             state["g61"] = Garage61Client(config.garage61_token)
         if body.units in ("metric", "imperial"):
             config.units = body.units
@@ -144,6 +155,16 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
             config.overlay_scale = max(0.6, min(2.0, body.overlay_scale))
         if body.overlay_opacity is not None:
             config.overlay_opacity = max(0.3, min(1.0, body.overlay_opacity))
+        if body.voice_mode in ("off", "cues", "detailed"):
+            config.voice_mode = body.voice_mode
+        if body.voice_native is not None:
+            config.voice_native = body.voice_native
+            engine.coach.voice.native = body.voice_native
+        if body.voice_practice_only is not None:
+            config.voice_practice_only = body.voice_practice_only
+        if body.focus_target is not None:
+            config.focus_target = max(0.0, min(1.0, body.focus_target))
+            engine.coach.focus.target = config.focus_target
         config.save()
         return config.public()
 
@@ -322,6 +343,30 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
         engine.set_sector_targets(a["best_sectors"], label)
         return {"targets": a["best_sectors"], "label": label}
 
+    # ----------------------------------------------------------------- coach
+    @app.get("/api/coach/report")
+    def coach_report():
+        with engine.lock:
+            rep = engine.coach.report()
+            rep["focus_drill"] = engine.coach.focus.status()
+        return rep
+
+    @app.post("/api/coach/focus")
+    def coach_focus(body: FocusIn):
+        with engine.lock:
+            if body.action == "stop":
+                engine.coach.stop_focus()
+            elif body.action == "corner" and body.corner is not None:
+                engine.coach.start_focus(body.corner)
+            else:
+                engine.coach.start_focus(None)
+            return engine.coach.focus.status()
+
+    @app.post("/api/voice/test")
+    def voice_test():
+        engine.coach.voice.say("SimCoach voice check. Brake later into turn one.", min_repeat_s=0)
+        return {"backend": engine.coach.voice.backend}
+
     # --------------------------------------------------------------- overlay
     @app.get("/overlay")
     def overlay_page():
@@ -338,7 +383,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
             while True:
                 await ws.send_json(engine.overlay())
                 await asyncio.sleep(0.05)
-        except (WebSocketDisconnect, RuntimeError):
+        except Exception:          # client went away (any transport error) - end the loop
             return
 
     @app.websocket("/ws/live")
@@ -353,11 +398,18 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False) -> F
                 await ws.send_json(msg)
                 tick += 1
                 await asyncio.sleep(0.05)   # 20 Hz to the UI
-        except (WebSocketDisconnect, RuntimeError):
+        except Exception:          # client went away (any transport error) - end the loop
             return
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
+
+
+def _prune_cache(keep: int = 200) -> None:
+    """Keep the downloaded-telemetry cache from growing forever on disk."""
+    files = sorted(cache_dir().glob("g61_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in files[keep:]:
+        p.unlink(missing_ok=True)
 
 
 def auto_sector_targets(engine: LiveEngine) -> None:

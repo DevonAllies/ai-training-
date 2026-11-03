@@ -6,6 +6,8 @@ if not exist .venv\Scripts\python.exe call install.bat
 .venv\Scripts\pyinstaller --noconfirm --name SimCoach --console ^
   --add-data "simcoach\static;simcoach\static" ^
   --collect-submodules uvicorn --hidden-import irsdk ^
+  --hidden-import pyttsx3.drivers.sapi5 --hidden-import comtypes.client ^
+  --add-data "sample_data;sample_data" ^
   simcoach_launcher.py
 echo.
 echo Built dist\SimCoach\SimCoach.exe

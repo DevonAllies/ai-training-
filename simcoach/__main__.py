@@ -20,7 +20,9 @@ log = logging.getLogger("simcoach")
 
 def import_sample_data() -> None:
     """Import Garage 61 exports shipped in ./sample_data (once)."""
-    folder = Path(__file__).resolve().parent.parent / "sample_data"
+    import sys
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))   # PyInstaller bundle
+    folder = base / "sample_data"
     if not folder.is_dir():
         return
     marker = sessions.sessions_dir() / ".sample_imported"
@@ -43,6 +45,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--host", default="127.0.0.1",
                     help="Use 0.0.0.0 to view the dashboard from a tablet/phone on your network")
     ap.add_argument("--demo", action="store_true", help="Simulated driver instead of iRacing")
+    ap.add_argument("--demo-speed", type=float, default=1.0, help=argparse.SUPPRESS)
     ap.add_argument("--no-browser", action="store_true", help="Don't open the dashboard")
     ap.add_argument("--no-overlay", action="store_true", help="Don't show the in-game overlay window")
     ap.add_argument("--import", dest="import_files", nargs="*", metavar="XLSX",
@@ -58,7 +61,7 @@ def main(argv: list[str] | None = None) -> None:
 
     import_sample_data()
     config = Config.load()
-    engine = LiveEngine(config, DemoSource() if args.demo else None)
+    engine = LiveEngine(config, DemoSource(args.demo_speed) if args.demo else None)
     if args.demo:
         from . import demo
         engine.set_reference(demo.reference_lap())

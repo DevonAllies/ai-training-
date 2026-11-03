@@ -227,3 +227,93 @@ def test_sector_targets_from_import():
     assert client.get("/overlay").status_code == 200
     assert "visible" in client.get("/api/overlay").json()
     assert client.post("/api/sessions/import", content=b"not a workbook").status_code == 422
+
+
+# ------------------------------------------------------- v3: coach, voice, memory
+def test_trail_braking_and_grades():
+    cmp = compare_laps(demo.make_lap(demo.YOU_STYLE, "me"), demo.reference_lap())
+    c3 = {c.name: c for c in cmp.corners}["C3"]
+    assert c3.issues[0] == "brake_early" and "no_trail" in c3.issues
+    sc = cmp.to_dict()["scores"]
+    assert 0 <= sc["braking"] < 100 and sc["technique"] < 100
+    perfect = compare_laps(demo.reference_lap(), demo.reference_lap()).to_dict()["scores"]
+    assert perfect["technique"] == 100 and perfect["pace"] == 100
+
+
+def test_voice_queue_is_bounded_and_deduped():
+    from simcoach.voice import VoiceCoach, spoken_seconds
+    v = VoiceCoach(native=False, log_size=5)
+    assert v.say("C3, brake later")
+    assert not v.say("C3, brake later")          # repeat suppressed
+    for i in range(50):
+        v.say(f"msg {i}", min_repeat_s=0)
+    assert len(v.log) == 5 and len(v._recent) <= 65
+    assert spoken_seconds(0.21) == "two tenths" and spoken_seconds(0.08) == "one tenth"
+
+
+def test_session_coach_report_focus_and_cues():
+    eng = LiveEngine(Config(record_laps=False, voice_native=False), DemoSource())
+    eng.coach.voice.native = False
+    eng.set_reference(demo.reference_lap())
+    _drive(eng, 3.6)
+    rep = eng.coach.report()
+    assert rep["laps"] >= 2 and rep["corners"]
+    worst = max(rep["corners"], key=lambda c: c["avg_loss"])
+    assert worst["name"] in ("C3", "C7") and worst["main_issue"]
+    assert rep["summary"]
+    spoken = [v["text"] for v in eng.coach.voice.log]
+    assert any(t.startswith("C3,") for t in spoken)       # pre-corner cue from last lap's mistake
+    # drill mode picks the worst corner automatically
+    st = eng.coach.start_focus(None)
+    assert st["active"] and st["name"] == worst["name"]
+    _drive(eng, 1.2)
+    assert eng.coach.focus.attempts >= 1
+    assert eng.overlay()["focus"]["name"] == worst["name"]
+
+
+def test_drill_completes_and_moves_on():
+    from simcoach.coach import SessionCoach
+    from simcoach.voice import VoiceCoach
+    c = SessionCoach(VoiceCoach(native=False))
+    comp = {"gap": 0.5, "scores": {}, "corners": [
+        {"name": "C1", "time_lost": 0.3, "issues": ["brake_early"]},
+        {"name": "C2", "time_lost": 0.2, "issues": ["late_throttle"]}]}
+    c.add_lap(1, 90.0, True, comp)
+    c.start_focus(None)
+    assert c.focus.name == "C1"
+    for _ in range(3):
+        c.on_corner(0, {"name": "C1", "time_lost": 0.01, "issues": []})
+    assert "C1" in c.focus.completed and c.focus.name == "C2"
+
+
+def test_no_memory_growth_over_long_session():
+    """Simulate a long stint; memory after warm-up must stay flat."""
+    import gc
+    import tracemalloc
+    eng = LiveEngine(Config(record_laps=False, voice_native=False), DemoSource())
+    eng.coach.voice.native = False
+    eng.set_reference(demo.reference_lap())
+    eng.coach.start_focus(None)
+    src = eng.source
+    eng.session = src.session()
+    per_lap = int(60 * 90)
+
+    def run(laps):
+        for _ in range(per_lap * laps):
+            src._last -= 1 / 60
+            eng._process(src.read())
+            eng.snapshot() if _ % 3 == 0 else None
+            eng.overlay() if _ % 3 == 0 else None
+
+    run(4)                                  # warm-up: caches, first laps, numpy pools
+    gc.collect()
+    tracemalloc.start()
+    base = tracemalloc.take_snapshot()
+    run(10)
+    gc.collect()
+    after = tracemalloc.take_snapshot()
+    tracemalloc.stop()
+    growth = sum(s.size_diff for s in after.compare_to(base, "filename"))
+    # 10 more laps of history (bounded deques) may add a little - but not per-sample growth
+    assert growth < 400_000, f"memory grew by {growth} bytes over 10 laps"
+    assert len(eng.events) <= 30 and len(eng.coach.history) <= 100

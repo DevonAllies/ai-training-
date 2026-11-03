@@ -55,7 +55,20 @@
 </div>
 <script>
 "use strict";
-const always = new URLSearchParams(location.search).has("always");
+const params = new URLSearchParams(location.search);
+const always = params.has("always");
+const speak = params.has("voice") && "speechSynthesis" in window;
+let lastVoiceId = null;
+function voice(list) {
+  if (!speak || !list || !list.length) return;
+  const maxId = list[list.length - 1].id;
+  if (lastVoiceId === null) { lastVoiceId = maxId; return; }      // don't replay history on load
+  list.filter((v) => v.id > lastVoiceId).forEach((v) => {
+    if (speechSynthesis.pending) speechSynthesis.cancel();        // never let phrases pile up
+    const u = new SpeechSynthesisUtterance(v.text); u.rate = 1.1; speechSynthesis.speak(u);
+  });
+  lastVoiceId = maxId;
+}
 const $ = (id) => document.getElementById(id);
 const fmtD = (d) => d === null || d === undefined ? "--.--" : (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2);
 const fmtT = (s) => { if (!(s > 0)) return "-:--.---"; const m = Math.floor(s / 60); return m + ":" + (s - m * 60).toFixed(3).padStart(6, "0"); };
@@ -84,8 +97,14 @@ function render(st) {
     $("cuetext").textContent = cue.m <= 0 ? `BRAKE (${cue.corner})` : `${cue.corner}  brake in ${dist}`;
   } else {
     el.classList.remove("now"); $("cuefill").style.width = "0";
-    $("cuetext").textContent = st.next_corner ? "Next: " + st.next_corner : "";
+    const f = st.focus || {};
+    if (f.active && f.name) {
+      const dots = Array.from({ length: f.needed }, (_, i) => i < f.streak ? "●" : "○").join(" ");
+      $("cuetext").innerHTML = `<span class="warn">DRILL ${esc(f.name)}</span> &nbsp;${dots}` +
+        (f.last_loss != null ? ` &nbsp;<span class="lbl">last ${fmtD(f.last_loss)}s</span>` : "");
+    } else $("cuetext").textContent = st.next_corner ? "Next: " + st.next_corner : "";
   }
+  voice(st.voice);
 
   const evs = (st.events || []).slice().reverse();
   $("events").innerHTML = evs.length ? evs.map((e, i) => `

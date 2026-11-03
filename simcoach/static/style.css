@@ -100,3 +100,15 @@ canvas { width: 100%; display: block; }
 .tips-list li { margin: 4px 0; }
 input[type=range] { width: 100%; }
 a { color: var(--accent); }
+
+.grades { display: grid; gap: 6px; }
+.grade { display: grid; grid-template-columns: 110px 1fr 36px; gap: 8px; align-items: center; font-size: 13px; }
+.grade .gbar { height: 10px; background: #0f1318; border-radius: 5px; overflow: hidden; }
+.grade .gbar div { height: 100%; border-radius: 5px; }
+.grade b { font-family: Consolas, monospace; text-align: right; }
+.drill .big { font-size: 26px; }
+.drill .streak { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.drill .streak i { width: 12px; height: 12px; border-radius: 50%; background: #262d36; display: inline-block; }
+.drill .streak i.on { background: var(--good); }
+.report-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 900px) { .report-grid { grid-template-columns: minmax(0, 1fr); } }

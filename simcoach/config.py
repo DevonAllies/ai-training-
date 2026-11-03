@@ -51,6 +51,12 @@ class Config:
     overlay_y: int = 60
     overlay_scale: float = 1.0
     overlay_opacity: float = 0.85
+    # Voice coach: "off", "cues" (one short reminder before a corner) or "detailed"
+    voice_mode: str = "cues"
+    voice_native: bool = True          # speak through Windows text-to-speech
+    voice_practice_only: bool = True
+    # Corner drill: a corner counts as "on target" within this many seconds of the reference
+    focus_target: float = 0.05
 
     @classmethod
     def path(cls) -> Path:

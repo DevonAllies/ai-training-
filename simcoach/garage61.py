@@ -10,6 +10,7 @@ yourself, your teammates and drivers you follow - there is no global search.
 
 from __future__ import annotations
 
+import collections
 import re
 import time
 from typing import Any
@@ -31,7 +32,8 @@ class Garage61Client:
         self.base_url = base_url
         self.timeout = timeout
         self._session = requests.Session()
-        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache: collections.OrderedDict[str, tuple[float, Any]] = collections.OrderedDict()
+        self._cache_max = 256
 
     # ------------------------------------------------------------------ http
     def _get(self, endpoint: str, params: dict | None = None, raw: bool = False):
@@ -74,7 +76,14 @@ class Garage61Client:
             return hit[1]
         val = fn()
         self._cache[key] = (now, val)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_max:     # bounded LRU - no unbounded growth
+            self._cache.popitem(last=False)
         return val
+
+    def close(self) -> None:
+        self._session.close()
+        self._cache.clear()
 
     # ------------------------------------------------------------- endpoints
     def me(self) -> dict:

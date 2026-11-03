@@ -103,6 +103,11 @@ function onSnap(s) {
   renderSectors(s.sectors || [], s.session && s.session.sectors ? s.session.sectors.length : 0, s.sector_targets);
   $("#sector-target").textContent = s.sector_target_label ? `· target: ${s.sector_target_label}` : "";
   renderSessionLaps(s.laps || []);
+  renderGrades(s.scores);
+  renderDrill(s.focus || {});
+  const lapKey = (s.laps || []).length + ":" + ((s.laps || []).slice(-1)[0] || {}).lap_time;
+  if (state.reportKey !== lapKey) { state.reportKey = lapKey; loadReport(); }
+  fillDrillCorners();
   if (s.trace) state.trace = s.trace;
   if ($("#tab-live").classList.contains("active")) drawLiveChart(s.pct);
 }
@@ -146,6 +151,70 @@ function renderSectors(done, n, targets) {
     } else html += `<div class="chip"><small>S${i}</small>–<small>${tgt}</small></div>`;
   }
   el.innerHTML = html;
+}
+
+const GRADE_LABELS = [["braking", "Braking"], ["turn_in", "Turn-in"], ["trail_braking", "Trail braking"],
+  ["min_speed", "Min speed"], ["throttle", "Throttle"], ["technique", "Technique"], ["pace", "Pace"]];
+const gradeColor = (v) => (v >= 85 ? "var(--good)" : v >= 65 ? "var(--ref)" : "var(--bad)");
+function renderGrades(sc) {
+  const el = $("#grades");
+  const key = JSON.stringify(sc || null);
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  if (!sc) return;
+  el.innerHTML = GRADE_LABELS.filter(([k]) => sc[k] !== null && sc[k] !== undefined).map(([k, l]) =>
+    `<div class="grade"><span>${l}</span><div class="gbar"><div style="width:${sc[k]}%;background:${gradeColor(sc[k])}"></div></div><b>${sc[k]}</b></div>`).join("");
+}
+
+function renderDrill(f) {
+  const el = $("#drill");
+  const key = JSON.stringify(f);
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  if (!f.active) {
+    el.innerHTML = '<span class="muted">Off. The coach picks the corner where you lose most and moves on once you\'re on target ' +
+      (f.needed || 3) + ' laps in a row.</span>' + (f.completed && f.completed.length ? `<div class="muted">Mastered: ${f.completed.map(esc).join(", ")}</div>` : "");
+    return;
+  }
+  const dots = Array.from({ length: f.needed }, (_, i) => `<i class="${i < f.streak ? "on" : ""}"></i>`).join("");
+  el.innerHTML = `<div><span class="big">${esc(f.name || "–")}</span><span class="streak">${dots}</span></div>
+    <div>${esc(f.message || "")}</div>
+    <div class="muted small-text">Target: within ${f.target.toFixed(2)}s of the reference · attempts ${f.attempts}
+      ${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
+    ${f.completed.length ? `<div class="muted small-text">Mastered: ${f.completed.map(esc).join(", ")}</div>` : ""}`;
+}
+
+function fillDrillCorners() {
+  const sel = $("#drill-corner");
+  const names = state.refCorners.map((c) => c.name).join();
+  if (sel.dataset.k === names) return;
+  sel.dataset.k = names;
+  sel.innerHTML = '<option value="">or choose corner…</option>' + state.refCorners.map((c, i) => `<option value="${i}">${esc(c.name)}</option>`).join("");
+}
+$("#drill-auto").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "auto" } }));
+$("#drill-stop").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "stop" } }));
+$("#drill-corner").addEventListener("change", (e) => {
+  if (e.target.value !== "") api("/api/coach/focus", { method: "POST", body: { action: "corner", corner: +e.target.value } });
+});
+
+async function loadReport() {
+  let r;
+  try { r = await api("/api/coach/report"); } catch { return; }
+  const el = $("#report");
+  if (!r.laps) { el.innerHTML = '<span class="muted">Appears after your first complete lap against a reference.</span>'; return; }
+  const rows = r.corners.slice().sort((a, b) => b.avg_loss - a.avg_loss).map((c) => `
+    <tr><td><b>${esc(c.name)}</b></td><td class="${c.avg_loss > 0.05 ? "pos" : c.avg_loss < -0.02 ? "neg" : ""}">${fmtDelta(c.avg_loss)}s</td>
+      <td>${fmtDelta(c.best_loss)}s</td><td>±${c.spread.toFixed(2)}</td>
+      <td>${c.main_issue ? esc(c.main_issue) + ` <span class="muted">(${c.main_issue_laps}/${c.laps})</span>` : '<span class="muted">–</span>'}</td></tr>`).join("");
+  const trend = r.trend.map((t) => t.technique ?? 0);
+  el.innerHTML = `<div class="report-grid"><div>
+      <ul class="tips-list">${r.summary.map((t) => `<li>${esc(t)}</li>`).join("") || "<li>No significant time loss – great driving.</li>"}</ul>
+      <p class="muted small-text">${r.laps} laps · best ${fmtTime(r.best_lap)} · average gap ${fmtDelta(r.avg_gap)}s ·
+        time on the table vs reference ${r.potential.toFixed(2)}s, vs your own best corners ${r.own_potential.toFixed(2)}s</p>
+      <div class="label">Technique grade per lap</div><canvas id="c-trend" height="90"></canvas></div>
+    <div><table class="tbl"><thead><tr><th>Corner</th><th>Avg</th><th>Best</th><th>Spread</th><th>Most common issue</th></tr></thead>
+      <tbody>${rows}</tbody></table></div></div>`;
+  if (trend.length > 1) Charts.line($("#c-trend"), [{ data: trend, color: Charts.css("--me"), width: 2 }], { ymin: 0, ymax: 100 });
 }
 
 function renderSessionLaps(laps) {
@@ -323,6 +392,9 @@ function renderComparison(r) {
   $("#a-gap").textContent = fmtDelta(c.gap) + "s";
   $("#a-gap").className = "big " + (c.gap > 0 ? "pos" : "neg");
   $("#a-focus").textContent = c.focus.length ? c.focus.join(", ") : "Nothing major";
+  const gEl = $("#a-grades"), sc = c.scores || {};
+  gEl.innerHTML = GRADE_LABELS.filter(([k]) => sc[k] !== null && sc[k] !== undefined).map(([k, l]) =>
+    `<div class="grade"><span>${l}</span><div class="gbar"><div style="width:${sc[k]}%;background:${gradeColor(sc[k])}"></div></div><b>${sc[k]}</b></div>`).join("");
 
   const regions = r.corners.map((k) => ({ start: k.start, end: k.end, apex: k.apex, label: k.name }));
   const me = r.me, ref = r.ref;
@@ -446,12 +518,19 @@ async function loadSettings() {
   $("#s-extra").value = (c.extra_drivers || []).join(", ");
   $("#s-overlay").value = c.overlay_mode || "practice";
   $("#s-opacity").value = c.overlay_opacity || 0.85;
+  $("#s-voice").value = c.voice_mode || "cues";
+  $("#s-voice-native").checked = c.voice_native !== false;
+  $("#s-voice-practice").checked = c.voice_practice_only !== false;
+  $("#s-focus-target").value = (c.focus_target ?? 0.05).toFixed(2);
 }
 $("#btn-save").addEventListener("click", async () => {
   const body = {
     units: $("#s-units").value, include_following: $("#s-following").checked,
     record_laps: $("#s-record").checked, extra_drivers: $("#s-extra").value.split(","),
     overlay_mode: $("#s-overlay").value, overlay_opacity: parseFloat($("#s-opacity").value),
+    voice_mode: $("#s-voice").value, voice_native: $("#s-voice-native").checked,
+    voice_practice_only: $("#s-voice-practice").checked,
+    focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
   if ($("#s-token").value.trim()) body.garage61_token = $("#s-token").value.trim();
   try {
@@ -466,6 +545,11 @@ $("#btn-test").addEventListener("click", async () => {
     const me = await api("/api/g61/me");
     msg($("#s-msg"), `Connected as ${[me.firstName, me.lastName].filter(Boolean).join(" ") || me.slug || "your account"}.`, "ok");
   } catch (e) { msg($("#s-msg"), e.message, "err"); }
+});
+$("#btn-voice-test").addEventListener("click", async () => {
+  try { const r = await api("/api/voice/test", { method: "POST" });
+    msg($("#s-msg"), r.backend === "unavailable" ? "Windows voice not available – use the browser overlay with ?voice=1." : "Speaking…", "ok"); }
+  catch (e) { msg($("#s-msg"), e.message, "err"); }
 });
 function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach((e) => (e.textContent = spdUnit())); }
 

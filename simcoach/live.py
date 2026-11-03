@@ -12,6 +12,7 @@ lap and produce coaching feedback as you drive:
 
 from __future__ import annotations
 
+import collections
 import logging
 import math
 import re
@@ -26,8 +27,10 @@ import numpy as np
 from . import demo
 from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corner, compare_laps,
                        detect_corners, steer_threshold, turn_in_bin)
+from .coach import SessionCoach
 from .config import Config, laps_dir
 from .lap import GRID, N_BINS, Lap, fmt_time
+from .voice import VoiceCoach
 
 log = logging.getLogger(__name__)
 
@@ -334,7 +337,10 @@ class LiveEngine:
         self.last_lap: Lap | None = None
         self.last_comparison: dict | None = None
         self.session_best: Lap | None = None
-        self.laps_done: list[dict] = []
+        self.laps_done: collections.deque[dict] = collections.deque(maxlen=200)
+        self.lap_count = 0
+        self.coach = SessionCoach(VoiceCoach(native=config.voice_native))
+        self.coach.focus.target = config.focus_target
         self.status_msg = "Waiting for iRacing…"
         self._next_corner = 0
 
@@ -362,11 +368,17 @@ class LiveEngine:
             self.thread.join(timeout=2)
         if self.source:
             self.source.close()
+        self.coach.voice.stop()
 
     def set_reference(self, lap: Lap | None, session_best: bool = False) -> None:
         with self.lock:
+            old = self.ref_corners
             self.reference = lap
             self.ref_corners = detect_corners(lap) if lap is not None else []
+            same_layout = len(old) == len(self.ref_corners) and all(
+                abs(a.apex - b.apex) <= 15 for a, b in zip(old, self.ref_corners))
+            if not same_layout:
+                self.coach.reset()
             self.ref_marks = build_ref_corners(lap, self.ref_corners) if lap is not None else []
             self.ref_label = lap.label if lap is not None else ""
             self.ref_is_session_best = session_best
@@ -437,6 +449,8 @@ class LiveEngine:
                 self.last_sample = None
                 return
             self.status_msg = "On track"
+            self.coach.voice_mode = self.config.voice_mode
+            self.coach.voice_allowed = self.is_practice or not self.config.voice_practice_only
             self._process(s)
 
     # ---------------------------------------------------------- processing
@@ -472,6 +486,7 @@ class LiveEngine:
             self.buf.add(dict(s, pct=0.0, session_time=t_cross))
             self.buf.add(s)
             self.callouts = []
+            self.coach.new_lap()
             self._reported = set()
             self._my_apex = {}
             self._next_corner = 0
@@ -485,6 +500,7 @@ class LiveEngine:
         if self.buf.start is not None:
             self._check_sectors(prev, s)
             self._check_phases(s)
+            self._check_cues(s["pct"])
         self._check_corner(s["pct"])
 
     # ------------------------------------------------------------- sectors
@@ -570,6 +586,19 @@ class LiveEngine:
                 if mt is not None:
                     self._event(idx, rc, "throttle", (mt - rc.throttle) * bin_m)
 
+    def _check_cues(self, pct: float) -> None:
+        """Give the coach a chance to speak a reminder before each corner."""
+        if not self.ref_marks:
+            return
+        L = self.track_length()
+        for idx, rc in enumerate(self.ref_marks):
+            cue_bin = rc.brake if rc.brake is not None else rc.corner.start
+            dist = (GRID[cue_bin] - pct) * L
+            if dist < -L / 2:
+                dist += L
+            if 120 <= dist <= 350:
+                self.coach.pre_corner(idx, rc.corner.name)
+
     def _check_corner(self, pct: float) -> None:
         ref = self.reference
         buf = self.buf
@@ -584,7 +613,9 @@ class LiveEngine:
                 continue
             me = buf.to_lap(self.track_length())
             rep = compare_corner(me, ref, c, self.track_length() / N_BINS)
-            self.callouts.append(rep.to_dict())
+            d = rep.to_dict()
+            self.callouts.append(d)
+            self.coach.on_corner(self._next_corner - 1, d)
 
     def track_length(self) -> float:
         return (self.session.get("track_length") or
@@ -616,6 +647,11 @@ class LiveEngine:
             cmp = compare_laps(lap, self.reference, self.ref_corners, self.config.units)
             self.last_comparison = cmp.to_dict()
             info["gap"] = round(lap_time - self.reference.lap_time, 3)
+            info["scores"] = self.last_comparison.get("scores")
+        self.lap_count += 1
+        info["lap"] = self.lap_count
+        self.coach.add_lap(self.lap_count, lap_time, buf.valid,
+                           self.last_comparison if self.reference is not None else None)
 
         if buf.valid:
             if self.session_best is None or lap_time < self.session_best.lap_time:
@@ -657,7 +693,9 @@ class LiveEngine:
                 "reference": self.ref_label,
                 "ref_is_session_best": self.ref_is_session_best,
                 "ref_lap_time": self.reference.lap_time if self.reference is not None else None,
-                "laps": self.laps_done[-15:],
+                "laps": list(self.laps_done)[-15:],
+                "focus": self.coach.focus.status(),
+                "scores": (self.last_comparison or {}).get("scores"),
                 "sector_target_label": self.sector_target_label or (
                     "session best" if self.current_sector_targets() else ""),
                 "sector_targets": self.current_sector_targets(),
@@ -702,7 +740,11 @@ class LiveEngine:
         on_track = bool(snap.get("on_track"))
         visible = on_track and (mode == "always" or (mode == "practice" and snap["is_practice"]))
         now = self.last_sample["session_time"] if self.last_sample else 0.0
-        recent = [e for e in snap.get("events", []) if now - e["t"] < 12.0][-4:]
+        focus = snap.get("focus") or {}
+        evs = [e for e in snap.get("events", []) if now - e["t"] < 12.0]
+        if focus.get("active") and focus.get("name"):
+            evs = [e for e in evs if e["corner"] == focus["name"]]
+        recent = evs[-4:]
         return {
             "visible": visible,
             "mode": mode,
@@ -718,6 +760,9 @@ class LiveEngine:
             "sectors": snap.get("sectors", []),
             "sector_count": len(self.sector_starts()),
             "units": self.config.units,
+            "focus": focus,
+            "voice": self.coach.voice.recent(5),
+            "voice_mode": self.config.voice_mode,
         }
 
     def trace(self) -> dict:
