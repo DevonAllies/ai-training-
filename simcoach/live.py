@@ -29,6 +29,7 @@ from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corne
                        detect_corners, steer_threshold, turn_in_bin)
 from .coach import SessionCoach
 from .config import Config, laps_dir
+from .corners import apply_names
 from .lap import GRID, N_BINS, Lap, fmt_time
 from .voice import VoiceCoach
 
@@ -375,6 +376,7 @@ class LiveEngine:
             old = self.ref_corners
             self.reference = lap
             self.ref_corners = detect_corners(lap) if lap is not None else []
+            apply_names(self.ref_corners, self.track_name(lap))
             same_layout = len(old) == len(self.ref_corners) and all(
                 abs(a.apex - b.apex) <= 15 for a, b in zip(old, self.ref_corners))
             if not same_layout:
@@ -383,6 +385,20 @@ class LiveEngine:
             self.ref_label = lap.label if lap is not None else ""
             self.ref_is_session_best = session_best
             self._next_corner = self._corner_after(self.last_sample["pct"] if self.last_sample else 0)
+
+    def track_name(self, lap: Lap | None = None) -> str:
+        """Track name used for the corner map: live session first, else the lap's metadata."""
+        s = self.session
+        if s.get("track"):
+            return " - ".join(x for x in (s.get("track"), s.get("track_config")) if x)
+        lap = lap if lap is not None else self.reference
+        return (lap.meta.get("track") if lap is not None else "") or ""
+
+    def refresh_corner_names(self) -> None:
+        """Re-apply the corner map (after it was edited or the session changed)."""
+        with self.lock:
+            if self.ref_corners:
+                apply_names(self.ref_corners, self.track_name())
 
     def set_sector_targets(self, targets: list[float] | None, label: str = "", auto: bool = False) -> None:
         with self.lock:
@@ -438,6 +454,8 @@ class LiveEngine:
                 self.session = sess
                 if changed:
                     self.best_live_sectors = None
+                    if self.ref_corners:
+                        apply_names(self.ref_corners, self.track_name())
                     if self.on_session_change:
                         try:
                             self.on_session_change(self)
@@ -549,7 +567,8 @@ class LiveEngine:
             return
         self._reported.add(key)
         text, sev = classify(kind, value, self.config.units)
-        self.events.append({"corner": rc.corner.name, "kind": kind, "value": round(value, 1),
+        self.events.append({"corner": rc.corner.name, "title": rc.corner.title,
+                            "kind": kind, "value": round(value, 1),
                             "text": text, "severity": sev,
                             "t": self.last_sample["session_time"] if self.last_sample else 0.0})
         self.events = self.events[-30:]
@@ -597,7 +616,7 @@ class LiveEngine:
             if dist < -L / 2:
                 dist += L
             if 120 <= dist <= 350:
-                self.coach.pre_corner(idx, rc.corner.name)
+                self.coach.pre_corner(idx, rc.corner.name, rc.corner.spoken)
 
     def _check_corner(self, pct: float) -> None:
         ref = self.reference
@@ -726,6 +745,7 @@ class LiveEngine:
                     if nxt < len(self.ref_corners):
                         c = self.ref_corners[nxt]
                         out["next_corner"] = c.name
+                        out["next_corner_title"] = c.title
                         out["next_corner_m"] = max(0.0, (GRID[c.apex] - pct) * self.track_length())
                     out["brake_cue"] = self._brake_cue(pct)
             out["callouts"] = self.callouts[-8:]

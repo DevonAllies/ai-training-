@@ -1,3 +1,3 @@
 """SimCoach - iRacing training companion powered by Garage 61 data."""
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"

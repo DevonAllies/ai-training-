@@ -24,6 +24,14 @@ class Corner:
     start: int   # bin where the segment starts (previous straight's top speed)
     apex: int    # bin of the reference minimum speed
     end: int     # bin where the segment ends (next top speed)
+    number: str = ""        # official turn number from the track's corner map, e.g. "1" or "4-5"
+    label_name: str = ""    # official name, e.g. "Tertre Rouge"
+    title: str = ""         # "T5 · Tertre Rouge" (falls back to name)
+    spoken: str = ""        # what the voice coach says
+
+    def __post_init__(self):
+        self.title = self.title or self.name
+        self.spoken = self.spoken or self.name
 
     @property
     def pct(self) -> float:
@@ -49,6 +57,8 @@ class CornerReport:
     trail_m_diff: float | None = None     # + = I trail-braked further into the turn
     tips: list[str] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)   # issue codes, most important first
+    title: str = ""
+    spoken: str = ""
 
     def to_dict(self) -> dict:
         return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in asdict(self).items()}
@@ -191,7 +201,7 @@ def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
         brake_point_m=brake_point_m, peak_brake_diff=peak_brake_diff,
         min_speed_diff_kmh=min_speed_diff, exit_speed_diff_kmh=exit_speed_diff,
         throttle_point_m=throttle_point_m, turn_in_m=turn_in_m, coast_m_diff=coast_diff,
-        trail_m_diff=trail_diff,
+        trail_m_diff=trail_diff, title=c.title, spoken=c.spoken,
     )
     rep.issues = detect_issues(rep)
     rep.tips = coaching_tips(rep)

@@ -37,6 +37,7 @@ function showTab(name) {
   if (name === "analyze") fillAnalyzeSelects();
   if (name === "settings") loadSettings();
   if (name === "sessions") loadSessions();
+  if (name === "corners") initCorners();
 }
 
 // ------------------------------------------------------------ live
@@ -87,6 +88,7 @@ function onSnap(s) {
   $("#elapsed").textContent = fmtTime(s.elapsed);
   $("#predicted").textContent = fmtTime(s.predicted);
   $("#next-corner").textContent = s.next_corner ? `${s.next_corner} · ${dist(s.next_corner_m)}` : "–";
+  $("#next-corner").title = s.next_corner_title || "";
 
   $("#spd-me").textContent = s.speed !== undefined ? spd(s.speed).toFixed(0) : "0";
   $("#spd-ref").textContent = s.ref_speed !== undefined ? spd(s.ref_speed).toFixed(0) : "–";
@@ -121,7 +123,7 @@ function renderCallouts(list) {
   ul.innerHTML = list.slice().reverse().map((c) => {
     const cls = c.time_lost > 0 ? "pos" : "neg";
     const tips = c.tips.length ? c.tips.map(esc).join("<br>") : "On pace.";
-    return `<li><span class="t ${cls}">${esc(c.name)} ${fmtDelta(c.time_lost)}s</span><br>${tips}</li>`;
+    return `<li><span class="t ${cls}">${esc(c.title || c.name)} ${fmtDelta(c.time_lost)}s</span><br>${tips}</li>`;
   }).join("");
 }
 
@@ -132,7 +134,7 @@ function renderEvents(list) {
   ul.dataset.k = key;
   if (!list.length) { ul.innerHTML = '<li class="muted">Drive through a corner to see feedback.</li>'; return; }
   ul.innerHTML = list.slice().reverse().map((e) =>
-    `<li><span class="sev ${e.severity}"></span><span class="t">${esc(e.corner)}</span> ${esc(e.text)}</li>`).join("");
+    `<li><span class="sev ${e.severity}"></span><span class="t">${esc(e.title || e.corner)}</span> ${esc(e.text)}</li>`).join("");
 }
 
 function renderSectors(done, n, targets) {
@@ -177,7 +179,7 @@ function renderDrill(f) {
     return;
   }
   const dots = Array.from({ length: f.needed }, (_, i) => `<i class="${i < f.streak ? "on" : ""}"></i>`).join("");
-  el.innerHTML = `<div><span class="big">${esc(f.name || "–")}</span><span class="streak">${dots}</span></div>
+  el.innerHTML = `<div><span class="big">${esc(f.title || f.name || "–")}</span><span class="streak">${dots}</span></div>
     <div>${esc(f.message || "")}</div>
     <div class="muted small-text">Target: within ${f.target.toFixed(2)}s of the reference · attempts ${f.attempts}
       ${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
@@ -186,10 +188,10 @@ function renderDrill(f) {
 
 function fillDrillCorners() {
   const sel = $("#drill-corner");
-  const names = state.refCorners.map((c) => c.name).join();
+  const names = state.refCorners.map((c) => c.title || c.name).join();
   if (sel.dataset.k === names) return;
   sel.dataset.k = names;
-  sel.innerHTML = '<option value="">or choose corner…</option>' + state.refCorners.map((c, i) => `<option value="${i}">${esc(c.name)}</option>`).join("");
+  sel.innerHTML = '<option value="">or choose corner…</option>' + state.refCorners.map((c, i) => `<option value="${i}">${esc(c.title || c.name)}</option>`).join("");
 }
 $("#drill-auto").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "auto" } }));
 $("#drill-stop").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "stop" } }));
@@ -203,7 +205,7 @@ async function loadReport() {
   const el = $("#report");
   if (!r.laps) { el.innerHTML = '<span class="muted">Appears after your first complete lap against a reference.</span>'; return; }
   const rows = r.corners.slice().sort((a, b) => b.avg_loss - a.avg_loss).map((c) => `
-    <tr><td><b>${esc(c.name)}</b></td><td class="${c.avg_loss > 0.05 ? "pos" : c.avg_loss < -0.02 ? "neg" : ""}">${fmtDelta(c.avg_loss)}s</td>
+    <tr><td><b>${esc(c.title || c.name)}</b></td><td class="${c.avg_loss > 0.05 ? "pos" : c.avg_loss < -0.02 ? "neg" : ""}">${fmtDelta(c.avg_loss)}s</td>
       <td>${fmtDelta(c.best_loss)}s</td><td>±${c.spread.toFixed(2)}</td>
       <td>${c.main_issue ? esc(c.main_issue) + ` <span class="muted">(${c.main_issue_laps}/${c.laps})</span>` : '<span class="muted">–</span>'}</td></tr>`).join("");
   const trend = r.trend.map((t) => t.technique ?? 0);
@@ -424,7 +426,7 @@ function renderComparison(r) {
   draw();
 
   $("#corner-table tbody").innerHTML = c.corners.map((k) => `
-    <tr><td><b>${esc(k.name)}</b></td>
+    <tr><td><b>${esc(k.title || k.name)}</b></td>
       <td class="${k.time_lost > 0.02 ? "pos" : k.time_lost < -0.02 ? "neg" : ""}">${fmtDelta(k.time_lost)}s
         <div class="muted small-text">entry ${fmtDelta(k.entry_lost)} / exit ${fmtDelta(k.exit_lost)}</div></td>
       <td>${k.brake_point_m === null ? "–" : signed(state.units === "metric" ? k.brake_point_m : k.brake_point_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
@@ -505,6 +507,108 @@ $("#ss-delete").addEventListener("click", async () => {
   const id = $("#ss-list").value; if (!id || !confirm("Delete this imported session?")) return;
   await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   loadSessions();
+});
+
+// ------------------------------------------------------------ corners (names & numbers)
+const cn = { data: null };
+async function initCorners() {
+  const sel = $("#cn-ref"), keep = sel.value;
+  sel.innerHTML = "";
+  const st = await api("/api/status");
+  if (st.live.reference) addOption(sel, "live_ref", `Live reference (${st.live.reference})`);
+  if (st.demo) addOption(sel, "demo:ref", "Demo – reference lap");
+  addOption(sel, "session_best", "Session best");
+  (await api("/api/local/laps").catch(() => [])).forEach((l) => addOption(sel, "local:" + l.file, `${l.label} – ${l.track || ""}`));
+  (state.g61Laps || []).filter((l) => l.can_view_telemetry !== false)
+    .forEach((l) => addOption(sel, "g61:" + l.id, `G61: ${l.driver} ${fmtTime(l.lap_time)} – ${l.track || ""}`));
+  if (keep) sel.value = keep;
+  if (!cn.data && sel.value) loadCorners();
+}
+$("#cn-load").addEventListener("click", loadCorners);
+$("#cn-ref").addEventListener("change", loadCorners);
+
+async function loadCorners() {
+  const key = $("#cn-ref").value;
+  if (!key) { msg($("#cn-msg"), "Pick a lap first (a reference lap on the track you want to label).", "err"); return; }
+  msg($("#cn-msg"), "Loading…");
+  try {
+    cn.data = await api("/api/corners?ref=" + encodeURIComponent(key));
+    $("#cn-track").value = cn.data.map_track || cn.data.track || "";
+    msg($("#cn-msg"), cn.data.map_track ? `Using the saved corner map for "${cn.data.map_track}".`
+      : `${cn.data.corners.length} corners found. Enter turn numbers/names and save.`, cn.data.map_track ? "ok" : "");
+    renderCornerTable(); drawCornerViews();
+  } catch (e) { msg($("#cn-msg"), e.message, "err"); }
+}
+
+function renderCornerTable() {
+  const L = cn.data.lap.track_length;
+  $("#cn-table tbody").innerHTML = cn.data.corners.map((c, i) => `
+    <tr data-i="${i}"><td><b>C${c.index + 1}</b></td>
+      <td>${L ? dist(c.distance_m) : (c.pct * 100).toFixed(1) + "%"}</td>
+      <td>${state.units === "metric" ? c.min_speed_kmh + " km/h" : Math.round(c.min_speed_kmh / 1.609) + " mph"}</td>
+      <td><input type="text" class="cn-num" value="${esc(c.number)}" placeholder="e.g. 1"></td>
+      <td><input type="text" class="cn-name" value="${esc(c.label_name)}" placeholder="e.g. Tertre Rouge"></td></tr>`).join("");
+  $("#cn-table").querySelectorAll("tr[data-i]").forEach((tr) => {
+    tr.addEventListener("focusin", () => { cn.hl = +tr.dataset.i; drawCornerViews(); });
+  });
+}
+
+function cornerLabel(c, i) {
+  const tr = $("#cn-table").querySelector(`tr[data-i="${i}"]`);
+  const num = tr ? tr.querySelector(".cn-num").value.trim() : c.number;
+  return num ? "T" + num : "C" + (c.index + 1);
+}
+
+function drawCornerViews() {
+  const d = cn.data; if (!d) return;
+  const lap = d.lap;
+  const hl = cn.hl;
+  const hasMap = !!(lap.lat && lap.lon);
+  $("#cn-map").classList.toggle("hidden", !hasMap);
+  $("#cn-nomap").classList.toggle("hidden", hasMap);
+  if (hasMap) {
+    Charts.trackMap($("#cn-map"), lap.lat, lap.lon, lap.speed.map(() => 0),
+      { labels: d.corners.map((c, i) => ({ i: c.apex, text: cornerLabel(c, i) })), marker: hl !== undefined ? d.corners[hl].apex : undefined });
+  }
+  Charts.line($("#cn-speed"), [{ data: lap.speed.map(spd), color: Charts.css("--ref") }], {
+    n: lap.speed.length, ymin: 0,
+    regions: d.corners.map((c, i) => ({ start: c.start, end: c.end, apex: c.apex, label: cornerLabel(c, i) })),
+    cursor: hl !== undefined ? d.corners[hl].apex / lap.speed.length : undefined,
+  });
+}
+$("#cn-table").addEventListener("input", () => drawCornerViews());
+
+function collectCorners() {
+  return cn.data.corners.map((c, i) => {
+    const tr = $("#cn-table").querySelector(`tr[data-i="${i}"]`);
+    return { pct: c.pct, number: tr.querySelector(".cn-num").value.trim(), name: tr.querySelector(".cn-name").value.trim() };
+  }).filter((c) => c.number || c.name);
+}
+
+$("#cn-save").addEventListener("click", async () => {
+  if (!cn.data) return;
+  const track = $("#cn-track").value.trim();
+  if (!track) { msg($("#cn-msg"), "Enter the track name.", "err"); return; }
+  try {
+    const r = await api("/api/corners", { method: "POST", body: { track, corners: collectCorners() } });
+    msg($("#cn-msg"), `Saved ${r.corners.length} named corners for "${r.track}". They're live in the overlay, voice and reports.`, "ok");
+    refreshReference();
+  } catch (e) { msg($("#cn-msg"), e.message, "err"); }
+});
+$("#cn-export").addEventListener("click", () => {
+  const track = $("#cn-track").value.trim();
+  if (track) window.location = "/api/corners/export?track=" + encodeURIComponent(track);
+});
+$("#cn-import").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    const body = { track: data.track || $("#cn-track").value.trim(), corners: data.corners || [] };
+    const r = await api("/api/corners/import", { method: "POST", body });
+    msg($("#cn-msg"), `Imported ${r.corners.length} corners for "${r.track}".`, "ok");
+    if (cn.data) loadCorners();
+  } catch (err) { msg($("#cn-msg"), "Import failed: " + err.message, "err"); }
+  e.target.value = "";
 });
 
 // ------------------------------------------------------------ settings
