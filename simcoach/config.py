@@ -34,6 +34,19 @@ def cache_dir() -> Path:
     return d
 
 
+# Training features that can be switched on/off in Settings (all on by default).
+FEATURES = {
+    "live_feedback": "Live corner feedback (brake / turn-in / trail / apex / throttle calls)",
+    "brake_cue": "Brake cue on the overlay",
+    "sectors": "Sector times",
+    "drills": "Corner drills",
+    "consistency": "Consistency trainer",
+    "endurance": "Race, endurance & fuel saving",
+    "practice": "Progress & practice plan",
+    "goals": "Weekly training goal & streak",
+}
+
+
 @dataclass
 class Config:
     garage61_token: str = ""
@@ -51,8 +64,10 @@ class Config:
     overlay_y: int = 60
     overlay_scale: float = 1.0
     overlay_opacity: float = 0.85
-    # Voice coach: "off", "cues" (one short reminder before a corner) or "detailed"
-    voice_mode: str = "cues"
+    # Voice coach: "off", "cues" (one reminder before a corner), "detailed" (+ braking/turn-in/trail
+    # calls) or "full" (+ brake pressure, apex speed and throttle calls)
+    voice_mode: str = "full"
+    voice_v2: bool = False             # one-time move of old "cues" setups to the more vocal coach
     voice_native: bool = True          # speak through Windows text-to-speech
     voice_practice_only: bool = True
     # Corner drill: a corner counts as "on target" within this many seconds of the reference
@@ -61,6 +76,14 @@ class Config:
     record_history: bool = True
     # Let a tablet/phone on the home network open the dashboard (needs a restart to apply)
     lan_access: bool = False
+    # Weekly training goal: "minutes" on track, "sessions" or "laps" per week
+    goal_type: str = "minutes"
+    goal_value: float = 180
+    # Training features on/off (keys from FEATURES)
+    features: dict = field(default_factory=lambda: {k: True for k in FEATURES})
+
+    def on(self, feature: str) -> bool:
+        return bool(self.features.get(feature, True))
     # Updates from GitHub Releases: "auto" (install when not driving), "notify" or "off"
     update_mode: str = "auto"
     update_repo: str = "DevonAllies/ai-training-"
@@ -81,6 +104,12 @@ class Config:
                 raw = {}
             known = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__}
             cfg = cls(**known)
+        cfg.features = {k: bool(cfg.features.get(k, True)) for k in FEATURES} if isinstance(cfg.features, dict) \
+            else {k: True for k in FEATURES}
+        if not cfg.voice_v2:                       # v0.7: the coach became more vocal by default
+            if cfg.voice_mode == "cues":
+                cfg.voice_mode = "full"
+            cfg.voice_v2 = True
         env_token = os.environ.get("GARAGE61_TOKEN")
         if env_token and not cfg.garage61_token:
             cfg.garage61_token = env_token

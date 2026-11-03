@@ -140,6 +140,71 @@ Every session is saved, per car and track. The **Progress** tab shows:
 
 **Make my practice plan** builds a plan for your next session that fits the time you have (30–90 min): warm-up, drills on your two costliest corners with a target and a focus cue, your weakest technique, a consistency run, and push laps against your optimal lap.
 
+## Voice coach
+
+The default **Full coach** mode calls what happens as you drive, in a few words, at about 5–8 short calls per lap:
+
+- **Braking:** *"Brake later, 15 metres"* and *"Brake harder"* (peak brake pressure)
+- **Turn-in:** *"Turn in earlier"* or *"Turn in later"*
+- **Trail braking:** *"Trail the brake deeper"* when you come off the brake before turning in
+- **Apex speed and throttle:** *"Carry more speed"*, *"Throttle earlier"*
+
+It also gives a reminder before each corner based on last lap (*"T5, brake later"*) and praises a fixed mistake (*"Good trail"*). During a drill it only talks about the drill corner.
+
+Prefer it quieter? **Settings → Voice** offers *Braking, turn-in & trail braking* only, *Quiet* (one reminder per corner) or *Off*.
+
+## Drills
+
+Drills (Live tab) work on one corner. The coach picks the right drill for your most common mistake there, or you choose one:
+
+| Drill | For | Goal |
+| --- | --- | --- |
+| **Brake-point ladder** | braking too early | Brake 5 m later each lap until you reach the reference; if you overshoot, the last good point is locked in and you hit it twice |
+| **Trail braking** | coming off the brake before turning in | Stay on the brake into the turn like the reference |
+| **Turn-in point** | turning in early or late, line | Turn in within 5 m of the reference |
+| **Minimum speed** | over-slowing, understeer | Apex speed within 2 km/h |
+| **Throttle pick-up** | late throttle, wheelspin, slow exits | Full throttle as early as the reference, no wheelspin |
+| **Consistency** | slides, busy steering | 3 laps in a row within 0.08 s of each other |
+| **Match the reference** | everything else | Within the target of the reference, 3 laps in a row |
+
+Every attempt is judged on that drill's own measure, logged on the drill card, shown on the overlay (including the brake-point target during the ladder) and called by voice.
+
+## Consistency trainer
+
+The Live tab's **Consistency trainer** is for race pace: the same lap, every lap.
+
+1. **Set it up.** Choose a window (for example ±0.3 s) and a goal (for example 10 laps in a row). Enter a target lap, or leave it empty and the trainer sets it from your pace after 3 laps.
+2. **Every lap** lands **inside** or **outside** the window. The overlay shows the streak, and the voice calls *"In the window, 7 in a row"* or *"Outside, plus 0.6. T3 cost 0.4"*.
+3. **When a lap falls out**, the trainer compares it with *your own usual lap*, not the reference, and names the corner and the habit that changed. For example: *"T3 cost 0.55 s – braked 13 m earlier than usual"*.
+4. **Results:** a consistency **score** (0–100), your best streak and lap-time spread. They're saved per session, so they appear in Progress.
+5. **The track map** shows where you're inconsistent: red is a corner that varies more than your typical corner, green is steadier.
+6. **From the plan:** the practice plan's *Consistency run* starts the trainer with one click and ticks itself off when you reach the goal.
+
+## Weekly training goal and streak
+
+At the top of the **Progress** tab you can set a weekly goal: **minutes on track** (default 3 hours), **sessions** or **laps** per week.
+
+- **This week:** shows your progress so far, what's left and the days remaining. The voice calls *"Weekly goal reached. 4 week streak"* when you hit it.
+- **Streak:** the number of weeks in a row with the goal met, plus your best streak. The week you're in never breaks it until it's over.
+- **Last 8 weeks:** a chart against the goal line, and a small *"Week 1h 20m / 3h · streak 3"* chip on the Live tab.
+
+Time on track is measured live (pit lane and pauses don't count).
+
+## Training features on/off
+
+**Settings → Training features** switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, and progress/practice plan. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
+
+## Session report and practice plan
+
+- **Printable report** (Live tab → Session report, or Progress tab). One page with:
+  - laps, best lap, gap and grades
+  - a summary
+  - the **top three problem corners**, each with speed, pedal and line traces and the tips
+  - recurring problems
+  - the practice plan, with tick boxes
+- **Print / Save as PDF** prints it or saves a PDF. **Download** saves a self-contained HTML file to share with a coach or teammate.
+- **Practice plan** (Progress tab). Every corner step has a **Start drill** button that starts the right drill on that corner. The step is **ticked off automatically** when you complete the drill on track, and the voice announces the next step. *Push laps* builds your optimal lap and sets it as the reference in one click.
+
 ## Race, endurance and fuel saving
 
 The **Race** tab is for longer races.
@@ -273,6 +338,10 @@ python -m pytest tests           # run tests
 | `simcoach/race.py` | Stints, fuel, endurance planner, lift-and-coast planner |
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/lan.py` | Tablet/phone access on the home network (QR code, settings guard) |
+| `simcoach/consistency.py` | Consistency trainer (window, streak, why a lap fell out, score) |
+| `simcoach/goals.py` | Weekly training goal and streak |
+| `simcoach/drills.py` | Drill library (brake ladder, trail braking, turn-in, apex speed, throttle, consistency) |
+| `simcoach/static/report.html` | Printable post-session report |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |
 | `packaging/` | PyInstaller spec, Inno Setup installer script, icon |

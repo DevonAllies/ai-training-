@@ -232,15 +232,26 @@ class OverlayWindow:
         else:
             focus = st.get("focus") or {}
             if focus.get("active") and focus.get("name"):
-                c.create_text(12 * k, y + 13 * k, anchor="w", text=f"DRILL {focus['name']}",
-                              fill=WARN, font=font(11, True))
+                drill = (focus.get("drill") or "drill").upper()
+                c.create_text(12 * k, y + 6 * k, anchor="w", text=f"{focus['name']} · {drill}",
+                              fill=WARN, font=font(9, True))
+                lt = focus.get("ladder_locked", focus.get("ladder_target"))
+                if focus.get("kind") == "brake_ladder" and lt is not None:
+                    c.create_text(12 * k, y + 20 * k, anchor="w", text=f"brake at {lt:+.0f} m",
+                                  fill=FG, font=font(9, mono=True))
                 for i in range(focus.get("needed", 3)):
-                    x0 = 120 * k + i * 16 * k
+                    x0 = 200 * k + i * 16 * k
                     c.create_oval(x0, y + 7 * k, x0 + 12 * k, y + 19 * k, width=0,
                                   fill=GOOD if i < focus.get("streak", 0) else "#262d36")
                 if focus.get("last_loss") is not None:
                     c.create_text(W - 12 * k, y + 13 * k, anchor="e",
                                   text=f"last {fmt_delta(focus['last_loss'])}s", fill=MUTED, font=font(9, mono=True))
+            elif st.get("consistency"):
+                cs = st["consistency"]
+                tgt = f"{fmt_time(cs['target'])} ±{cs['window']:.1f}" if cs.get("target") else "setting target…"
+                c.create_text(12 * k, y + 13 * k, anchor="w", text=f"CONSISTENCY {cs['streak']}/{cs['goal']}",
+                              fill=GOOD if cs.get("streak") else WARN, font=font(11, True))
+                c.create_text(W - 12 * k, y + 13 * k, anchor="e", text=tgt, fill=MUTED, font=font(9, mono=True))
             else:
                 c.create_text(12 * k, y + 13 * k, anchor="w",
                               text=f"Next: {st.get('next_corner') or '–'}", fill=MUTED, font=font(10))

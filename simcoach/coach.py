@@ -18,6 +18,7 @@ from __future__ import annotations
 import collections
 import statistics
 
+from . import drills
 from .analysis import ISSUE_LABELS, SHORT_CUES
 from .voice import VoiceCoach, spoken_seconds
 
@@ -39,13 +40,25 @@ class FocusDrill:
         self.last_issue = ""
         self.completed: list[str] = []
         self.message = ""
+        self.kind = "time"                 # drill type from drills.DRILLS
+        self.state: dict = {}              # the drill's own memory (e.g. brake ladder target)
+        self.results: list[dict] = []      # last attempts (bounded)
+
+    def reset_attempts(self) -> None:
+        self.streak = self.attempts = 0
+        self.last_loss = None
+        self.state = {}
+        self.results = []
 
     def status(self) -> dict:
+        d = drills.DRILLS.get(self.kind, drills.DRILLS["time"])
         return {"active": self.active, "auto": self.auto, "corner": self.corner, "name": self.name,
-                "title": self.title or self.name,
+                "title": self.title or self.name, "kind": self.kind, "drill": d["title"], "how": d["how"],
                 "target": self.target, "needed": self.needed, "streak": self.streak,
                 "attempts": self.attempts, "last_loss": self.last_loss, "last_issue": self.last_issue,
-                "completed": list(self.completed), "message": self.message}
+                "completed": list(self.completed), "message": self.message,
+                "results": list(self.results[-6:]), "ladder_target": self.state.get("target"),
+                "ladder_locked": self.state.get("locked")}
 
 
 class SessionCoach:
@@ -56,6 +69,7 @@ class SessionCoach:
         self.corner_names: dict[int, str] = {}
         self.corner_titles: dict[int, str] = {}
         self.focus = FocusDrill()
+        self.plan: list[dict] = []                  # current practice plan (with status per step)
         self._cued: set[int] = set()
         self.voice_mode = "cues"                    # off | cues | detailed
         self.voice_allowed = True                   # e.g. only in practice sessions
@@ -112,29 +126,7 @@ class SessionCoach:
         f = self.focus
         name = rep.get("spoken") or rep["name"]          # spoken form for the voice
         if f.active and f.corner == idx:
-            f.attempts += 1
-            f.last_loss = rep["time_lost"]
-            f.last_issue = ISSUE_LABELS.get(rep["issues"][0], "") if rep.get("issues") else ""
-            if rep["time_lost"] <= f.target:
-                f.streak += 1
-                f.message = f"{rep.get('title') or rep['name']}: on target ({f.streak}/{f.needed})"
-                if f.streak >= f.needed:
-                    f.completed.append(rep["name"])
-                    f.message = f"{rep.get('title') or rep['name']} mastered! " + \
-                        ("Moving to the next corner." if f.auto else "")
-                    self._say(f"{name} done. Nice work.", important=True)
-                    if f.auto:
-                        self._pick_focus(exclude=set(f.completed))
-                    else:
-                        f.streak = 0
-                    return
-                self._say(f"{name}, good. {f.streak} of {f.needed}", important=True)
-            else:
-                f.streak = 0
-                f.message = f"{rep.get('title') or rep['name']}: {rep['time_lost']:+.2f}s - " \
-                            f"{f.last_issue or 'keep working'}"
-                if self.voice_mode == "detailed":
-                    self._say(f"{name}, {spoken_seconds(rep['time_lost'])} lost", important=True)
+            self._drill_attempt(idx, rep, name)
             return
         if f.active:
             return
@@ -164,12 +156,42 @@ class SessionCoach:
             self._pick_focus(exclude=set(f.completed))
 
     # ------------------------------------------------------------- focus mode
-    def start_focus(self, corner: int | None = None, target: float | None = None) -> dict:
+    def _drill_attempt(self, idx: int, rep: dict, name: str) -> None:
+        f = self.focus
+        title = rep.get("title") or rep["name"]
+        f.attempts += 1
+        f.last_loss = rep["time_lost"]
+        f.last_issue = ISSUE_LABELS.get(rep["issues"][0], "") if rep.get("issues") else ""
+        res = drills.evaluate(f.kind, rep, f.state, f.target)
+        f.results.append({"attempt": f.attempts, "ok": res["ok"], "text": res["text"],
+                          "time_lost": round(rep["time_lost"], 3)})
+        del f.results[:-20]
+        f.streak = f.streak + 1 if res["ok"] else 0
+        done = res["done"] or f.streak >= f.needed
+        drill_name = drills.DRILLS.get(f.kind, drills.DRILLS["time"])["title"]
+        if done:
+            f.completed.append(rep["name"])
+            f.message = f"{title}: {drill_name} done! {res['text']}"
+            self._say(f"{name}, drill complete. Nice work.", important=True)
+            self._plan_step_done(idx, f.kind)
+            if f.auto:
+                self._pick_focus(exclude=set(f.completed))
+            else:
+                f.active = False
+            return
+        f.message = f"{title} · {drill_name}: {res['text']}" + (f" ({f.streak}/{f.needed})" if f.streak else "")
+        if res.get("say"):
+            self._say(f"{name}, {res['say']}" + (f". {f.streak} of {f.needed}" if res["ok"] else ""),
+                      important=True)
+        elif self.voice_mode in ("detailed", "full") and not res["ok"]:
+            self._say(f"{name}, {spoken_seconds(rep['time_lost'])} lost", important=True)
+
+    def start_focus(self, corner: int | None = None, target: float | None = None,
+                    kind: str | None = None) -> dict:
         f = self.focus
         f.active = True
         f.auto = corner is None
-        f.streak = f.attempts = 0
-        f.last_loss = None
+        f.reset_attempts()
         if target:
             f.target = target
         if corner is None:
@@ -178,8 +200,17 @@ class SessionCoach:
             f.corner = corner
             f.name = self.corner_names.get(corner, f"C{corner + 1}")
             f.title = self.corner_titles.get(corner, f.name)
-            f.message = f"Focus on {f.title}"
+            if kind is None:                   # pick the drill from this corner's most common mistake
+                c = next((c for c in self.report()["corners"] if c["index"] == corner), None)
+                kind = drills.drill_for(c["main_issue_code"] if c else None)
+            self._set_kind(kind)
+            f.message = f"{drills.DRILLS[f.kind]['title']} on {f.title}: {drills.DRILLS[f.kind]['how']}"
         return f.status()
+
+    def _set_kind(self, kind: str | None) -> None:
+        f = self.focus
+        f.kind = kind if kind in drills.DRILLS else "time"
+        f.needed = drills.DRILLS[f.kind]["needed"]
 
     def stop_focus(self) -> None:
         self.focus.active = False
@@ -200,9 +231,45 @@ class SessionCoach:
         best = max(cand, key=lambda c: c["avg_loss"])
         f.corner, f.name = best["index"], best["name"]
         f.title = best["title"]
-        f.message = f"Focus on {best['title']}: {best['main_issue'] or 'losing time'} " \
-                    f"(avg {best['avg_loss']:+.2f}s)"
-        self._say(f"Focus on {best['spoken']}", important=True)
+        f.reset_attempts()
+        self._set_kind(drills.drill_for(best.get("main_issue_code")))
+        d = drills.DRILLS[f.kind]
+        f.message = f"{d['title']} on {best['title']}: {best['main_issue'] or 'losing time'} " \
+                    f"(avg {best['avg_loss']:+.2f}s). {d['how']}"
+        self._say(f"Drill: {d['title']}, {best['spoken']}", important=True)
+
+    # ----------------------------------------------------------- practice plan
+    def set_plan(self, plan: list[dict]) -> list[dict]:
+        self.plan = [dict(p, status=p.get("status", "pending")) for p in plan][:12]
+        return self.plan
+
+    def start_plan_step(self, i: int) -> dict:
+        if not (0 <= i < len(self.plan)):
+            raise IndexError(i)
+        step = self.plan[i]
+        for p in self.plan:
+            if p["status"] == "active":
+                p["status"] = "pending"
+        step["status"] = "active"
+        d = step.get("drill")
+        if d:
+            self.start_focus(d["corner"], kind=d.get("kind"), target=d.get("target"))
+            self.focus.auto = False
+        return step
+
+    def mark_plan_step(self, i: int, status: str = "done") -> None:
+        if 0 <= i < len(self.plan) and status in ("pending", "active", "done", "skipped"):
+            self.plan[i]["status"] = status
+
+    def _plan_step_done(self, corner: int, kind: str) -> None:
+        for p in self.plan:
+            d = p.get("drill")
+            if p["status"] == "active" and d and d["corner"] == corner:
+                p["status"] = "done"
+                nxt = next((q for q in self.plan if q["status"] == "pending"), None)
+                if nxt:
+                    self._say(f"Next: {nxt['title']}", important=True)
+                return
 
     # ----------------------------------------------------------------- report
     def report(self) -> dict:

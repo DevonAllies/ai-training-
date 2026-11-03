@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimCoach Session Report</title>
+<link rel="icon" href="/static/icon.png">
+<style>
+  /* Printable report: always light so it prints and reads well as a PDF */
+  :root { --bg: #ffffff; --card: #ffffff; --line: #e3e6ea; --text: #15181c; --muted: #66707c;
+          --me: #1f7ae0; --ref: #d68a00; --good: #1a9e63; --bad: #d93a3f; --accent: #1f7ae0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #eef0f3; color: var(--text); font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+  .page { max-width: 900px; margin: 16px auto; background: #fff; padding: 28px 32px; border-radius: 8px;
+          box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .toolbar { max-width: 900px; margin: 16px auto 0; display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px; }
+  button { background: #fff; border: 1px solid #c9ced5; border-radius: 6px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid var(--text);
+           padding-bottom: 10px; margin-bottom: 16px; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; } h2 { font-size: 15px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .5px; }
+  h3 { font-size: 14px; margin: 0 0 4px; }
+  .muted { color: var(--muted); } .small { font-size: 11px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .stat b { display: block; font: 700 18px Consolas, monospace; }
+  .grades { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; }
+  .grade { display: grid; grid-template-columns: 110px 1fr 32px; gap: 8px; align-items: center; }
+  .gbar { height: 8px; background: #edf0f3; border-radius: 4px; overflow: hidden; } .gbar div { height: 100%; }
+  ul { margin: 6px 0; padding-left: 18px; } li { margin: 3px 0; }
+  .corner { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; break-inside: avoid; }
+  .corner .row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; }
+  .pos { color: var(--bad); } .neg { color: var(--good); }
+  table { width: 100%; border-collapse: collapse; } td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .step { border-left: 3px solid var(--accent); padding: 5px 10px; margin: 6px 0; break-inside: avoid; }
+  .box { width: 12px; height: 12px; border: 1.5px solid var(--text); display: inline-block; margin-right: 6px; vertical-align: -1px; }
+  canvas { width: 100%; display: block; }
+  .legend { font-size: 11px; color: var(--muted); } .sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
+  @media print {
+    body { background: #fff; } .toolbar { display: none; }
+    .page { box-shadow: none; margin: 0; padding: 0; max-width: none; }
+  }
+  @media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } .grades, .corner .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="history.length > 1 ? history.back() : (location.href = '/')">Back</button>
+  <button id="dl">Download (.html)</button>
+  <button class="primary" onclick="window.print()">Print / Save as PDF</button>
+</div>
+<div class="page" id="page"><p class="muted">Loading report…</p></div>
+<script src="/static/charts.js"></script>
+<script>
+"use strict";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtT = (s) => { if (!(s > 0)) return "–"; const m = Math.floor(s / 60); return m + ":" + (s - m * 60).toFixed(3).padStart(6, "0"); };
+const fmtD = (d) => d == null ? "–" : (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2);
+const GL = [["braking", "Braking"], ["turn_in", "Turn-in"], ["trail_braking", "Trail braking"], ["min_speed", "Min speed"],
+  ["throttle", "Throttle"], ["line", "Racing line"], ["car_control", "Car control"], ["technique", "Technique"], ["pace", "Pace"]];
+const gcol = (v) => v >= 85 ? "var(--good)" : v >= 65 ? "var(--ref)" : "var(--bad)";
+
+(async function () {
+  let r;
+  try { const res = await fetch("/api/report"); r = await res.json(); if (!res.ok) throw new Error(r.detail); }
+  catch (e) { document.getElementById("page").innerHTML = `<h1>No report yet</h1><p>${esc(e.message)}</p>`; return; }
+  const k = r.units === "metric";
+  const spd = (ms) => k ? ms * 3.6 : ms * 2.23694;
+  const rep = r.report;
+  const g = r.grades || {};
+  let h = `<header><div><h1>Session report</h1><div>${esc(r.track || "–")} · ${esc(r.car || "–")}</div>
+      <div class="muted small">${esc(r.driver || "")} ${r.reference ? "· reference: " + esc(r.reference) : ""}</div></div>
+      <div class="muted small" style="text-align:right">SimCoach ${esc(r.version)}<br>${esc(r.generated.replace("T", " "))}<br>${esc(r.source)}</div></header>
+    <div class="stats">
+      <div class="stat"><span class="muted small">Laps</span><b>${rep.laps ?? "–"}</b></div>
+      <div class="stat"><span class="muted small">Best lap</span><b>${fmtT(rep.best_lap)}</b></div>
+      <div class="stat"><span class="muted small">Avg gap to reference</span><b>${fmtD(rep.avg_gap)}s</b></div>
+      <div class="stat"><span class="muted small">Your own best corners</span><b>${rep.own_potential != null ? "−" + rep.own_potential.toFixed(2) + "s" : "–"}</b></div>
+    </div>
+    <h2>Technique grades <span class="muted small">(session average, 100 = matches reference)</span></h2>
+    <div class="grades">${GL.filter(([x]) => g[x] != null).map(([x, l]) =>
+      `<div class="grade"><span>${l}</span><div class="gbar"><div style="width:${g[x]}%;background:${gcol(g[x])}"></div></div><b>${g[x]}</b></div>`).join("") || '<span class="muted">No grades yet.</span>'}</div>
+    <h2>Summary</h2><ul>${(rep.summary || []).map((s) => `<li>${esc(s)}</li>`).join("") || "<li>No significant time loss – great session.</li>"}</ul>`;
+  if (r.recurring && r.recurring.length) h += `<p><b>Keeps coming back:</b> ${r.recurring.map((x) => `${esc(x.corner)} – ${esc(x.issue)} (${x.sessions} sessions)`).join("; ")}</p>`;
+  h += `<h2>Top problems</h2>`;
+  if (!r.top.length) h += `<p class="muted">No corner loses more than 0.05 s on average.</p>`;
+  r.top.forEach((t, i) => {
+    const c = t.corner, l = t.last_lap || {};
+    h += `<div class="corner"><h3>${i + 1}. ${esc(c.title || c.name)} <span class="pos">${fmtD(c.avg_loss)}s/lap</span>
+      <span class="muted small">best ${fmtD(c.best_loss)}s · ±${(c.spread || 0).toFixed(2)}s · ${esc(c.main_issue || "")} ${c.main_issue_laps ? "(" + c.main_issue_laps + "/" + c.laps + " laps)" : ""}</span></h3>
+      <div class="row"><div>${t.trace ? `<canvas id="sp${i}" height="120"></canvas><canvas id="pd${i}" height="70"></canvas>
+        <div class="legend"><span class="sw" style="background:var(--me)"></span>You (last lap)<span class="sw" style="background:var(--ref)"></span>Reference</div>` : '<p class="muted small">Traces are shown for the live session.</p>'}</div>
+      <div>${t.trace && t.trace.ref_lat ? `<canvas id="ln${i}" height="150"></canvas>` : ""}
+        <ul>${(l.tips || []).map((x) => `<li>${esc(x)}</li>`).join("") || (c.main_issue ? `<li>${esc(c.main_issue)}</li>` : "")}</ul>
+        ${l.brake_point_m != null ? `<table class="small"><tr><th>Brake point</th><td>${l.brake_point_m > 0 ? "+" : ""}${l.brake_point_m.toFixed(0)} m</td><th>Apex speed</th><td>${(k ? l.min_speed_diff_kmh : l.min_speed_diff_kmh / 1.609).toFixed(1)} ${k ? "km/h" : "mph"}</td></tr>
+          <tr><th>Turn-in</th><td>${l.turn_in_m != null ? (l.turn_in_m > 0 ? "+" : "") + l.turn_in_m.toFixed(0) + " m" : "–"}</td><th>Trail braking</th><td>${l.trail_m_diff != null ? (l.trail_m_diff > 0 ? "+" : "") + l.trail_m_diff.toFixed(0) + " m" : "–"}</td></tr></table>` : ""}
+      </div></div></div>`;
+  });
+  h += `<h2>Practice plan for next session</h2>` + (r.plan || []).map((p, i) =>
+    `<div class="step"><span class="box"></span><b>${i + 1}. ${esc(p.title)}</b> <span class="muted">· ${p.minutes} min</span><br>${esc(p.detail)}</div>`).join("");
+  h += `<p class="muted small" style="margin-top:20px">Generated by SimCoach. Positions on track: + means later than the reference (brake, turn-in, throttle).</p>`;
+  document.getElementById("page").innerHTML = h;
+  r.top.forEach((t, i) => {
+    const tr = t.trace; if (!tr) return;
+    const reg = [{ start: tr.apex - 1, end: tr.apex + 1, apex: tr.apex, label: "apex" }];
+    Charts.line(document.getElementById("sp" + i), [{ data: tr.ref_speed.map(spd), color: "#d68a00" }, { data: tr.me_speed.map(spd), color: "#1f7ae0", width: 2 }], { regions: reg });
+    Charts.line(document.getElementById("pd" + i), [
+      { data: tr.ref_throttle.map((v) => v * 100), color: "#d68a00" }, { data: tr.me_throttle.map((v) => v * 100), color: "#1f7ae0" },
+      { data: tr.ref_brake.map((v) => -v * 100), color: "#d68a00" }, { data: tr.me_brake.map((v) => -v * 100), color: "#1f7ae0" }],
+      { ymin: -105, ymax: 105, fmt: (v) => Math.abs(v).toFixed(0) + "%" });
+    if (tr.ref_lat && tr.me_lat) Charts.trackLines(document.getElementById("ln" + i),
+      [{ lat: tr.ref_lat, lon: tr.ref_lon, color: "#d68a00", width: 3 }, { lat: tr.me_lat, lon: tr.me_lon, color: "#1f7ae0", width: 2 }], { scaleM: 20 });
+  });
+  document.getElementById("dl").onclick = () => {           // canvases -> images so the file stands alone
+    const clone = document.documentElement.cloneNode(true);
+    document.querySelectorAll("canvas").forEach((cv) => {
+      const img = document.createElement("img"); img.src = cv.toDataURL("image/png"); img.style.width = "100%";
+      const target = clone.querySelector("#" + cv.id); if (target) target.replaceWith(img);
+    });
+    clone.querySelectorAll("script, .toolbar").forEach((n) => n.remove());
+    const blob = new Blob(["<!doctype html>\n" + clone.outerHTML], { type: "text/html" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = `SimCoach report ${(r.track || "session").replace(/[^\w -]/g, "")} ${r.generated.slice(0, 10)}.html`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+})();
+</script>
+</body>
+</html>

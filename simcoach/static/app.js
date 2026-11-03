@@ -39,7 +39,7 @@ function showTab(name) {
   if (name === "sessions") loadSessions();
   if (name === "corners") initCorners();
   if (name === "race") refreshRace();
-  if (name === "progress") initProgress();
+  if (name === "progress") { initProgress(); loadGoal(); }
 }
 
 // ------------------------------------------------------------ live
@@ -109,6 +109,8 @@ function onSnap(s) {
   renderSessionLaps(s.laps || []);
   renderGrades(s.scores);
   renderDrill(s.focus || {});
+  renderConsistency(s.consistency || {});
+  applyFeatures(s.features);
   const lapKey = (s.laps || []).length + ":" + ((s.laps || []).slice(-1)[0] || {}).lap_time;
   if (state.reportKey !== lapKey) { state.reportKey = lapKey; loadReport(); }
   fillDrillCorners();
@@ -182,11 +184,14 @@ function renderDrill(f) {
     return;
   }
   const dots = Array.from({ length: f.needed }, (_, i) => `<i class="${i < f.streak ? "on" : ""}"></i>`).join("");
-  el.innerHTML = `<div><span class="big">${esc(f.title || f.name || "–")}</span><span class="streak">${dots}</span></div>
-    <div>${esc(f.message || "")}</div>
-    <div class="muted small-text">Target: within ${f.target.toFixed(2)}s of the reference · attempts ${f.attempts}
-      ${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
-    ${f.completed.length ? `<div class="muted small-text">Mastered: ${f.completed.map(esc).join(", ")}</div>` : ""}`;
+  const ladder = f.kind === "brake_ladder" && (f.ladder_target != null || f.ladder_locked != null)
+    ? `<div class="small-text"><b>Brake point target:</b> ${(f.ladder_locked ?? f.ladder_target).toFixed(0)} m vs reference${f.ladder_locked != null ? " (locked – hit it)" : " (5 m later each lap)"}</div>` : "";
+  el.innerHTML = `<div><span class="big">${esc(f.title || f.name || "–")}</span> <span class="badge">${esc(f.drill || "")}</span><span class="streak">${dots}</span></div>
+    <div class="muted small-text">${esc(f.how || "")}</div>
+    <div style="margin-top:4px">${esc(f.message || "")}</div>${ladder}
+    <ul class="drill-results">${(f.results || []).slice().reverse().map((x) => `<li><span class="sev ${x.ok ? "good" : "bad"}"></span>#${x.attempt}: ${esc(x.text)}</li>`).join("")}</ul>
+    <div class="muted small-text">Attempts ${f.attempts}${f.last_loss !== null ? " · last " + fmtDelta(f.last_loss) + "s" : ""}</div>
+    ${f.completed.length ? `<div class="muted small-text">Done: ${f.completed.map(esc).join(", ")}</div>` : ""}`;
 }
 
 function fillDrillCorners() {
@@ -199,7 +204,7 @@ function fillDrillCorners() {
 $("#drill-auto").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "auto" } }));
 $("#drill-stop").addEventListener("click", () => api("/api/coach/focus", { method: "POST", body: { action: "stop" } }));
 $("#drill-corner").addEventListener("change", (e) => {
-  if (e.target.value !== "") api("/api/coach/focus", { method: "POST", body: { action: "corner", corner: +e.target.value } });
+  if (e.target.value !== "") api("/api/coach/focus", { method: "POST", body: { action: "corner", corner: +e.target.value, kind: $("#drill-kind").value || null } });
 });
 
 async function loadReport() {
@@ -471,10 +476,41 @@ $("#pg-plan").addEventListener("click", async () => {
   const c = (state.combos || [])[+$("#pg-combo").value];
   const q = new URLSearchParams({ minutes: $("#pg-min").value, ...(c ? { track: c.track, car: c.car } : {}) });
   const r = await api("/api/practice_plan?" + q);
-  $("#pg-plan-out").innerHTML = r.plan.length ? `<p class="muted small-text">Based on ${esc(r.source)}.</p>` +
-    r.plan.map((p, i) => `<div class="plan-step"><b>${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}</div>`).join("")
-    : `<span class="muted">${esc(r.note || "No data yet.")}</span>`;
+  state.planSource = r.source;
+  renderPlan(r.plan, r.note);
 });
+
+function renderPlan(plan, note) {
+  const el = $("#pg-plan-out");
+  if (!plan || !plan.length) { el.innerHTML = `<span class="muted">${esc(note || "No data yet.")}</span>`; return; }
+  const done = plan.filter((p) => p.status === "done").length;
+  el.innerHTML = `<p class="muted small-text">${state.planSource ? "Based on " + esc(state.planSource) + " · " : ""}${done}/${plan.length} done</p>` +
+    plan.map((p, i) => `<div class="plan-step ${p.status || ""}"><b>${p.status === "done" ? "✓ " : ""}${i + 1}. ${esc(p.title)} <span class="muted">· ${p.minutes} min</span></b>${esc(p.detail)}
+      <div class="actions">${p.drill ? `<button class="small primary" data-start="${i}">${p.status === "active" ? "Restart drill" : "Start drill"}</button>` : ""}
+        ${p.consistency ? `<button class="small primary" data-start="${i}">${p.status === "active" ? "Restart" : "Start consistency run"}</button>` : ""}
+        ${p.action === "optimal" ? `<button class="small primary" data-optimal="${i}">Build optimal lap &amp; use it</button>` : ""}
+        ${p.status !== "done" ? `<button class="small" data-done="${i}">Mark done</button>` : ""}</div></div>`).join("");
+}
+$("#pg-plan-out").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  try {
+    if (b.dataset.start !== undefined) {
+      const r = await api(`/api/plan/${b.dataset.start}/start`, { method: "POST" });
+      renderPlan(r.plan); msg($("#s-msg"), "");
+      alert(r.step.consistency ? "Consistency run started – the target is set from your pace after 3 laps. Watch the streak on the overlay."
+        : `Drill started: ${r.focus.drill} on ${r.focus.title}. Head out – the overlay and voice will coach this corner.`);
+    } else if (b.dataset.optimal !== undefined) {
+      await api("/api/optimal", { method: "POST", body: { include_teammates: true, set_reference: true } });
+      const r = await api(`/api/plan/${b.dataset.optimal}/start`, { method: "POST" }); renderPlan(r.plan);
+    } else if (b.dataset.done !== undefined) {
+      const r = await api(`/api/plan/${b.dataset.done}/done`, { method: "POST" }); renderPlan(r.plan);
+    }
+  } catch (e) { alert(e.message); }
+});
+setInterval(async () => {                       // keep ticks in sync when a drill completes on track
+  if (!$("#tab-progress").classList.contains("active")) return;
+  try { const r = await api("/api/plan"); if (r.plan.length) renderPlan(r.plan); } catch { /* offline */ }
+}, 4000);
 
 // ------------------------------------------------------------ teammate lap files
 const tm = { upload: null };
@@ -878,9 +914,10 @@ async function loadSettings() {
   $("#s-extra").value = (c.extra_drivers || []).join(", ");
   $("#s-overlay").value = c.overlay_mode || "practice";
   $("#s-opacity").value = c.overlay_opacity || 0.85;
-  $("#s-voice").value = c.voice_mode || "cues";
+  $("#s-voice").value = c.voice_mode || "full";
   $("#s-update").value = c.update_mode || "auto";
   $("#s-lan").checked = !!c.lan_access;
+  loadFeatureToggles();
   refreshLan();
   refreshUpdate();
   $("#s-autostart").checked = !!c.start_with_windows;
@@ -949,6 +986,94 @@ $("#btn-restart").addEventListener("click", async () => {
   msg($("#s-msg"), "Couldn't restart automatically – quit SimCoach from the tray and start it again.", "err");
 });
 
+// ------------------------------------------------------------ weekly goal & streak
+const fmtGoal = (v, t) => t === "minutes" ? (v >= 60 ? `${Math.floor(v / 60)}h ${String(Math.round(v % 60)).padStart(2, "0")}m` : `${Math.round(v)} min`) : `${Math.round(v)} ${t}`;
+async function loadGoal() {
+  if (state.features && state.features.goals === false) return;
+  let g; try { g = await api("/api/goals"); } catch { return; }
+  state.goal = g;
+  $("#wg-chip").textContent = `Week ${fmtGoal(g.this_week, g.goal_type)} / ${fmtGoal(g.goal_value, g.goal_type)}` + (g.streak ? ` · streak ${g.streak}` : "");
+  $("#wg-chip").className = "badge " + (g.met ? "good" : "");
+  const st = $("#wg-status"); if (!st) return;
+  st.innerHTML = `<div><span class="wg-big">${fmtGoal(g.this_week, g.goal_type)}</span> <span class="muted">of ${fmtGoal(g.goal_value, g.goal_type)} this week</span></div>
+    <div class="wg-bar"><div style="width:${Math.round(g.progress * 100)}%"></div></div>
+    <div>${g.met ? "<b class='neg'>Goal met this week ✓</b>" : `${fmtGoal(g.remaining, g.goal_type)} to go · ${g.days_left} day${g.days_left === 1 ? "" : "s"} left`}</div>
+    <div style="margin-top:6px"><span class="streak-flame">Streak: ${g.streak} week${g.streak === 1 ? "" : "s"}</span> <span class="muted">· best ${g.best_streak}</span></div>`;
+  if (document.activeElement !== $("#wg-value")) { $("#wg-value").value = g.goal_value; $("#wg-type").value = g.goal_type; }
+  const vals = g.weeks.map((w) => w.value);
+  Charts.line($("#wg-chart"), [{ data: vals, color: Charts.css("--me"), width: 2 },
+    { data: g.weeks.map(() => g.goal_value), color: Charts.css("--good"), width: 1 }],
+    { ymin: 0, ymax: Math.max(g.goal_value, ...vals) * 1.15, fmt: (v) => g.goal_type === "minutes" ? (v / 60).toFixed(1) + "h" : v.toFixed(0) });
+}
+$("#wg-save").addEventListener("click", async () => {
+  const v = parseFloat($("#wg-value").value);
+  if (!(v > 0)) { alert("Enter a goal, e.g. 180 (minutes), 3 (sessions) or 60 (laps)"); return; }
+  try { await api("/api/config", { method: "POST", body: { goal_type: $("#wg-type").value, goal_value: v } }); loadGoal(); }
+  catch (e) { alert(e.message); }
+});
+$("#wg-type").addEventListener("change", (e) => { $("#wg-value").value = { minutes: 180, sessions: 3, laps: 60 }[e.target.value]; });
+setInterval(loadGoal, 60000);
+
+// ------------------------------------------------------------ training features on/off
+function applyFeatures(f) {
+  if (!f) return;
+  const key = JSON.stringify(f);
+  if (state.featKey === key) return;
+  state.featKey = key; state.features = f;
+  document.querySelectorAll("[data-feature]").forEach((el) => el.classList.toggle("feature-off", f[el.dataset.feature] === false));
+  const active = document.querySelector(".tab.active");
+  if (active && active.classList.contains("feature-off")) showTab("live");
+}
+async function loadFeatureToggles() {
+  const r = await api("/api/features").catch(() => null); if (!r) return;
+  $("#s-features").innerHTML = Object.entries(r.labels).map(([k, l]) =>
+    `<label class="check"><input type="checkbox" data-feat="${k}" ${r.features[k] !== false ? "checked" : ""}> ${esc(l)}</label>`).join("");
+}
+$("#s-features").addEventListener("change", async (e) => {
+  const k = e.target.dataset.feat; if (!k) return;
+  try { const c = await api("/api/config", { method: "POST", body: { features: { [k]: e.target.checked } } }); applyFeatures(c.features); }
+  catch (err) { msg($("#s-msg"), err.message, "err"); }
+});
+
+// ------------------------------------------------------------ consistency trainer
+function renderConsistency(c) {
+  const el = $("#ct-status");
+  const key = JSON.stringify(c);
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  if (!c.active) {
+    el.innerHTML = '<span class="muted">Off. Leave the target empty and the trainer sets it from your pace after 3 laps.</span>' +
+      (c.laps ? `<div class="muted small-text">Last run: ${c.inside}/${c.laps} laps inside, best streak ${c.best_streak}${c.score != null ? ", score " + c.score : ""}</div>` : "");
+    return;
+  }
+  el.innerHTML = `<div><span class="ct-big">${c.streak}</span><span class="muted"> / ${c.goal} in a row</span>
+      ${c.score != null ? `<span class="badge ${c.score >= 80 ? "good" : c.score >= 60 ? "warn" : "bad"}" style="margin-left:10px">score ${c.score}</span>` : ""}</div>
+    <div>${c.target ? `Target <b>${fmtTime(c.target)}</b> ±${c.window.toFixed(2)}s` : "Setting the target from your next laps…"}
+      · best streak ${c.best_streak} · ${c.inside}/${c.laps} inside${c.stdev != null ? ` · ±${c.stdev.toFixed(2)}s spread` : ""}</div>
+    <div style="margin-top:4px">${esc(c.message || "")}</div>
+    <ul class="ct-laps">${(c.recent || []).slice().reverse().map((l) => l.inside == null ? `<li class="muted">${fmtTime(l.lap_time)} (setting target)</li>` :
+      `<li><span class="sev ${l.inside ? "good" : "bad"}"></span>${fmtTime(l.lap_time)} <b class="${l.inside ? "neg" : "pos"}">${fmtDelta(l.delta)}</b> ${l.why ? "– " + esc(l.why) : ""}</li>`).join("")}</ul>`;
+  drawConsistencyMap();
+}
+async function drawConsistencyMap() {
+  const ref = state.ref; if (!ref || !ref.lat) return;
+  let r; try { r = await api("/api/coach/report"); } catch { return; }
+  if (!r.corners || !r.corners.length) return;
+  // colour relative to your typical corner: green = steadier than usual, red = varies more
+  const spreads = r.corners.map((c) => c.spread || 0).sort((x, y) => x - y);
+  const median = spreads[Math.floor(spreads.length / 2)] || 0;
+  const vals = new Array(ref.lat.length).fill(0);
+  r.corners.forEach((c) => { const k = state.refCorners[c.index]; if (!k) return; for (let i = k.start; i <= k.end; i++) vals[i] = (c.spread || 0) - median; });
+  Charts.trackMap($("#ct-map"), ref.lat, ref.lon, vals, { labels: state.refCorners.map((k) => ({ i: k.apex, text: k.name })) });
+}
+$("#ct-start").addEventListener("click", async () => {
+  const t = parseLapTime($("#ct-target").value);
+  if (Number.isNaN(t)) { alert("Target format: 1:29.500 (or leave empty)"); return; }
+  try { await api("/api/consistency/start", { method: "POST", body: { target: t, window: parseFloat($("#ct-window").value), goal: parseInt($("#ct-goal").value, 10) } }); }
+  catch (e) { alert(e.message); }
+});
+$("#ct-stop").addEventListener("click", () => api("/api/consistency/stop", { method: "POST" }));
+
 // ------------------------------------------------------------ demo mode
 $("#demo-exit").addEventListener("click", async () => {
   $("#demo-exit").disabled = true;
@@ -1014,5 +1139,6 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});
   refreshUpdate();
+  loadGoal();
   connectWS();
 })();

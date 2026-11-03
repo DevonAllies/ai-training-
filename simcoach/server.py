@@ -46,6 +46,9 @@ class TokenIn(BaseModel):
     start_with_windows: bool | None = None
     update_mode: str | None = None
     lan_access: bool | None = None
+    features: dict | None = None
+    goal_type: str | None = None
+    goal_value: float | None = None
 
 
 class CornerMapIn(BaseModel):
@@ -81,9 +84,16 @@ class LapImportIn(BaseModel):
     set_reference: bool = False
 
 
+class ConsistencyIn(BaseModel):
+    target: float | None = None        # lap time in seconds; None = set from your pace
+    window: float | None = None
+    goal: int | None = None
+
+
 class FocusIn(BaseModel):
     action: str = "auto"               # "auto" | "corner" | "stop"
     corner: int | None = None
+    kind: str | None = None            # drill type (drills.DRILLS); None = coach picks from the main issue
 
 
 class TargetsIn(BaseModel):
@@ -261,7 +271,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             config.overlay_scale = max(0.6, min(2.0, body.overlay_scale))
         if body.overlay_opacity is not None:
             config.overlay_opacity = max(0.3, min(1.0, body.overlay_opacity))
-        if body.voice_mode in ("off", "cues", "detailed"):
+        if body.voice_mode in ("off", "cues", "detailed", "full"):
             config.voice_mode = body.voice_mode
         if body.voice_native is not None:
             config.voice_native = body.voice_native
@@ -277,6 +287,22 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
                 updater.check_soon()
         if body.lan_access is not None:
             config.lan_access = body.lan_access
+        if body.goal_type in ("minutes", "sessions", "laps"):
+            config.goal_type = body.goal_type
+        if body.goal_value is not None:
+            config.goal_value = max(1.0, min(10000.0, float(body.goal_value)))
+            engine._goal_announced = False
+        if body.features is not None:
+            from .config import FEATURES
+            for k, v in body.features.items():
+                if k in FEATURES:
+                    config.features[k] = bool(v)
+            if not config.on("drills"):
+                engine.coach.stop_focus()
+            if not config.on("consistency"):
+                engine.consistency.stop()
+            if not config.on("endurance"):
+                engine.disable_fuel_save()
         if body.start_with_windows is not None:
             from . import autostart
             try:
@@ -480,6 +506,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
 
     @app.get("/api/practice_plan")
     def practice_plan(track: str = "", car: str = "", minutes: int = 45):
+        need("practice")
         from . import history
         with engine.lock:
             rep = engine.coach.report()
@@ -494,7 +521,100 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
                         "note": "Drive a session against a reference first - the plan is built from it."}
             last = sessions[-1]
             rep, grades, source = last["report"], last.get("grades"), f"your last session ({last['date'][:8]})"
-        return {"plan": history.practice_plan(rep, grades, minutes), "source": source}
+        plan = history.practice_plan(rep, grades, minutes)
+        with engine.lock:
+            engine.coach.set_plan(plan)
+        return {"plan": engine.coach.plan, "source": source}
+
+    @app.get("/report")
+    def report_page():
+        return FileResponse(STATIC / "report.html")
+
+    @app.get("/api/report")
+    def session_report():
+        """Everything for the printable post-session report."""
+        import datetime as _dt
+        import statistics as _st
+        from . import history
+        with engine.lock:
+            rep = engine.coach.report()
+            comp = engine.last_comparison
+            last, ref = engine.last_lap, engine.reference
+            corners = list(engine.ref_corners)
+            hist = list(engine.coach.history)
+            plan = list(engine.coach.plan)
+            track, car = engine.track_name(), engine.session.get("car", "")
+            driver = engine.session.get("driver", "")
+        source = "live"
+        if not rep.get("laps"):                       # no laps this run: use the last saved session
+            sessions = history.load_sessions(track, car) or history.load_sessions()
+            if not sessions:
+                raise HTTPException(404, "No session to report on yet - drive some laps against a reference.")
+            s = sessions[-1]
+            rep = dict(s["report"], laps=s.get("valid_laps"), best_lap=s.get("best"), trend=[])
+            grades = s.get("grades", {})
+            track, car, source = s.get("track", ""), s.get("car", ""), f"saved session {s['date']}"
+            comp, last = None, None
+        else:
+            keys = {k for h in hist for k in (h.get("scores") or {})}
+            grades = {k: round(_st.fmean([h["scores"][k] for h in hist if (h.get("scores") or {}).get(k) is not None]))
+                      for k in keys if any((h.get("scores") or {}).get(k) is not None for h in hist)}
+        if not plan:
+            plan = history.practice_plan(rep, grades, 45)
+        top = sorted([c for c in rep.get("corners", []) if (c.get("avg_loss") or 0) > 0.05],
+                     key=lambda c: c["avg_loss"], reverse=True)[:3]
+        details = []
+        for c in top:
+            d = {"corner": c}
+            idx = c.get("index")
+            if comp and idx is not None and idx < len(comp["corners"]):
+                d["last_lap"] = comp["corners"][idx]
+            if last is not None and ref is not None and idx is not None and idx < len(corners):
+                k = corners[idx]
+                a, b = max(0, k.start - 25), min(len(ref.speed), k.end + 25)
+                seg = lambda arr: None if arr is None else [round(float(x), 6) for x in arr[a:b]]  # noqa: E731
+                d["trace"] = {"start": a, "apex": k.apex - a, "me_speed": seg(last.speed), "ref_speed": seg(ref.speed),
+                              "me_brake": seg(last.brake), "ref_brake": seg(ref.brake),
+                              "me_throttle": seg(last.throttle), "ref_throttle": seg(ref.throttle),
+                              "me_lat": seg(last.lat) if last.has_map() else None,
+                              "me_lon": seg(last.lon) if last.has_map() else None,
+                              "ref_lat": seg(ref.lat) if ref.has_map() else None,
+                              "ref_lon": seg(ref.lon) if ref.has_map() else None}
+            details.append(d)
+        prog = history.progress(track, car) if track else {"recurring": []}
+        return {"generated": _dt.datetime.now().isoformat(timespec="minutes"), "version": __version__,
+                "source": source, "track": track, "car": car, "driver": driver,
+                "reference": engine.ref_label, "report": rep, "grades": grades,
+                "last_scores": (comp or {}).get("scores"), "top": details, "plan": plan,
+                "recurring": prog.get("recurring", []), "units": config.units}
+
+    @app.get("/api/plan")
+    def current_plan():
+        with engine.lock:
+            return {"plan": engine.coach.plan, "focus": engine.coach.focus.status()}
+
+    @app.post("/api/plan/{i}/start")
+    def start_plan_step(i: int):
+        need("practice")
+        with engine.lock:
+            if 0 <= i < len(engine.coach.plan):
+                if engine.coach.plan[i].get("drill"):
+                    need("drills")
+                if engine.coach.plan[i].get("consistency"):
+                    need("consistency")
+            try:
+                step = engine.coach.start_plan_step(i)
+            except IndexError as exc:
+                raise HTTPException(404, "No such plan step - make a new plan") from exc
+            if step.get("consistency"):
+                engine.consistency.start(None, step["consistency"].get("window"), step["consistency"].get("goal"))
+            return {"step": step, "plan": engine.coach.plan, "focus": engine.coach.focus.status()}
+
+    @app.post("/api/plan/{i}/done")
+    def done_plan_step(i: int, status: str = "done"):
+        with engine.lock:
+            engine.coach.mark_plan_step(i, status)
+            return {"plan": engine.coach.plan}
 
     # --------------------------------------------------------- race / fuel
     @app.get("/api/race")
@@ -503,6 +623,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
 
     @app.post("/api/race/plan")
     def race_plan(body: RacePlanIn):
+        need("endurance")
         from .race import lift_plan, plan_race
         st = engine.race_status()
         avg = body.avg_lap or st.get("stint_avg") or (engine.reference.lap_time if engine.reference else None)
@@ -584,6 +705,8 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
 
     @app.post("/api/fuelsave")
     def fuel_save(body: FuelSaveIn):
+        if body.mode != "off":
+            need("endurance")
         if body.mode == "off":
             engine.disable_fuel_save()
             return {"active": False}
@@ -798,6 +921,41 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         return updater.install(force=True)
 
     # ----------------------------------------------------------------- coach
+    def need(feature: str):
+        if not config.on(feature):
+            from .config import FEATURES
+            raise HTTPException(409, f"'{FEATURES[feature]}' is switched off in Settings → Training features.")
+
+    @app.get("/api/goals")
+    def weekly_goal():
+        need("goals")
+        with engine.lock:
+            return engine.weekly_goal()
+
+    @app.get("/api/features")
+    def features():
+        from .config import FEATURES
+        return {"features": dict(config.features), "labels": FEATURES}
+
+    # ----------------------------------------------------------- consistency
+    @app.get("/api/consistency")
+    def consistency_status():
+        return engine.consistency.status()
+
+    @app.post("/api/consistency/start")
+    def consistency_start(body: ConsistencyIn):
+        need("consistency")
+        with engine.lock:
+            st = engine.consistency.start(body.target, body.window, body.goal)
+        engine.coach._say("Consistency run. Same lap, every lap", important=True)
+        return st
+
+    @app.post("/api/consistency/stop")
+    def consistency_stop():
+        with engine.lock:
+            engine.consistency.stop()
+            return engine.consistency.status()
+
     @app.get("/api/coach/report")
     def coach_report():
         with engine.lock:
@@ -807,11 +965,13 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
 
     @app.post("/api/coach/focus")
     def coach_focus(body: FocusIn):
+        if body.action != "stop":
+            need("drills")
         with engine.lock:
             if body.action == "stop":
                 engine.coach.stop_focus()
             elif body.action == "corner" and body.corner is not None:
-                engine.coach.start_focus(body.corner)
+                engine.coach.start_focus(body.corner, kind=body.kind)
             else:
                 engine.coach.start_focus(None)
             return engine.coach.focus.status()
