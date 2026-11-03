@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, demo, sessions
+from . import __version__, corners as cmap, demo, sessions
 from .analysis import compare_laps, detect_corners
 from .config import Config, cache_dir, laps_dir
 from .garage61 import Garage61Client, Garage61Error, _tokens, describe_lap
@@ -44,6 +44,11 @@ class TokenIn(BaseModel):
     focus_target: float | None = None
     start_with_windows: bool | None = None
     update_mode: str | None = None
+
+
+class CornerMapIn(BaseModel):
+    track: str
+    corners: list[dict]
 
 
 class FocusIn(BaseModel):
@@ -265,22 +270,20 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def get_lap(key: str):
         lap = load_lap(key)
         d = lap.to_json()
-        d["corners"] = [{"name": c.name, "start": c.start, "apex": c.apex, "end": c.end}
-                        for c in detect_corners(lap)]
+        d["corners"] = [cmap.corner_dict(c) for c in named_corners(lap)]
         return d
 
     @app.get("/api/compare")
     def compare(mine: str, ref: str):
         me_lap = load_lap(mine)
         ref_lap = load_lap(ref)
-        corners = detect_corners(ref_lap)
+        corners = named_corners(ref_lap)
         cmp = compare_laps(me_lap, ref_lap, corners, config.units)
         return {
             "me": me_lap.to_json(),
             "ref": ref_lap.to_json(),
             "comparison": cmp.to_dict(),
-            "corners": [{"name": c.name, "start": c.start, "apex": c.apex, "end": c.end}
-                        for c in corners],
+            "corners": [cmap.corner_dict(c) for c in corners],
         }
 
     # ------------------------------------------------------------------- live
@@ -300,8 +303,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if ref is None:
             return {"reference": None}
         return {"reference": ref.label, "lap": ref.to_json(),
-                "corners": [{"name": c.name, "start": c.start, "apex": c.apex, "end": c.end}
-                            for c in engine.ref_corners]}
+                "corners": [cmap.corner_dict(c) for c in engine.ref_corners]}
 
     @app.get("/api/live/last")
     def last_lap():
@@ -365,6 +367,58 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         label = f"best sectors – {a.get('track')} ({(a.get('date') or '')[:10]})"
         engine.set_sector_targets(a["best_sectors"], label)
         return {"targets": a["best_sectors"], "label": label}
+
+    # --------------------------------------------------------------- corners
+    def lap_track(lap: Lap) -> str:
+        return (lap.meta or {}).get("track") or engine.track_name(lap)
+
+    def named_corners(lap: Lap):
+        return cmap.apply_names(detect_corners(lap), lap_track(lap))
+
+    @app.get("/api/corners")
+    def get_corners(ref: str = "live_ref"):
+        """Detected corners of a lap + their current names, for the Corners editor."""
+        lap = load_lap(ref)
+        track = lap_track(lap)
+        cs = named_corners(lap)
+        L = lap.track_length or engine.track_length()
+        out = []
+        for c in cs:
+            d = cmap.corner_dict(c)
+            d["distance_m"] = round(c.pct * L)
+            d["min_speed_kmh"] = round(float(lap.speed[c.apex]) * 3.6)
+            out.append(d)
+        m = cmap.find_map(track)
+        j = lap.to_json()
+        return {"track": track, "map_track": m["track"] if m else None, "corners": out,
+                "lap": {k: j[k] for k in ("label", "speed", "lat", "lon", "track_length")}}
+
+    @app.post("/api/corners")
+    def save_corners(body: CornerMapIn):
+        if not body.track.strip():
+            raise HTTPException(400, "Track name is required")
+        data = cmap.save_map(body.track.strip(), body.corners)
+        engine.refresh_corner_names()
+        return data
+
+    @app.get("/api/corners/maps")
+    def corner_maps():
+        return cmap.list_maps()
+
+    @app.get("/api/corners/export")
+    def export_corners(track: str):
+        m = cmap.find_map(track)
+        if not m:
+            raise HTTPException(404, "No corner map for this track yet")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(m, headers={"Content-Disposition":
+                                        f'attachment; filename="corners_{cmap.track_key(m["track"])}.json"'})
+
+    @app.post("/api/corners/import")
+    def import_corners(body: CornerMapIn):
+        data = cmap.save_map(body.track.strip(), body.corners)
+        engine.refresh_corner_names()
+        return data
 
     # --------------------------------------------------------------- updates
     @app.get("/api/update")

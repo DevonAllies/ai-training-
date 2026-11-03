@@ -95,6 +95,23 @@ The overlay starts with SimCoach. By default it only appears when you are **on t
 
 All feedback is measured against your reference lap, which must have telemetry: a Garage 61 lap, one of your recorded laps, or your session best. Turn-in is detected from steering angle, at 30% of the reference driver's peak steering in that corner.
 
+## Corner numbers and names
+
+iRacing and Garage 61 telemetry contain no turn numbers or names, so SimCoach finds corners itself, as **C1, C2…** in the order of the lap's slow points. To use the real names:
+
+1. Open the **Corners** tab and pick a lap on that track. The live reference is the default.
+2. For each detected corner, type the official **turn number** and **name**. The track map and speed trace highlight the corner you're editing.
+   - For a chicane, enter a combined number like `4-5`.
+   - Leave a corner blank to keep its C-number.
+3. Click **Save names**.
+
+From then on that track shows **T5 · Tertre Rouge** everywhere: overlay, live feedback, corner summaries, session report and drill mode. The voice coach says *"Tertre Rouge, brake later"*.
+
+Some details:
+- The map is saved per track in `%APPDATA%\SimCoach\corners\` and works for every car and reference lap.
+- Garage 61 and iRacing spellings of a track name are matched automatically.
+- Use **Export** / **Import** to share corner maps, for example with teammates.
+
 ## Garage 61 session exports
 
 In Garage 61, open a session or event and choose **Export → Excel**. Then open SimCoach's **Sessions** tab and import the `.xlsx`. Exports in `sample_data/` are imported automatically on first start. That folder includes your IMSA race at Le Mans in the Dallara P217.
@@ -166,6 +183,7 @@ python -m pytest tests           # run tests
 | `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
+| `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |
 | `packaging/` | PyInstaller spec, Inno Setup installer script, icon |

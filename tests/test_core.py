@@ -446,3 +446,55 @@ def test_updater_falls_back_to_api_asset_url():
     u.http.get = get
     assert u.run_once()["status"] == "ready"
     assert any("/releases/assets/" in c for c in calls)
+
+
+# ---------------------------------------------------------- v5: corner names/numbers
+def test_corner_map_names_and_matching():
+    from simcoach import corners as cmap
+    ref = demo.reference_lap()
+    cs = detect_corners(ref)
+    track = "Demo Ring - GP"
+    cmap.save_map(track, [{"pct": cs[0].pct + 0.01, "number": "1", "name": "Hairpin"},
+                          {"pct": cs[2].pct, "number": "4-5", "name": ""},
+                          {"pct": cs[3].pct, "number": "", "name": "The Kink"},
+                          {"pct": 0.5, "number": "", "name": ""}])          # empty -> dropped
+    cmap.apply_names(cs, track)
+    assert (cs[0].name, cs[0].title, cs[0].spoken) == ("T1", "T1 · Hairpin", "Hairpin")
+    assert cs[1].name == "C2"                                               # unnamed keeps C#
+    assert cs[2].spoken == "Turn 4 to 5" and cs[2].title == "T4-5"
+    assert cs[3].name == "The Kink"
+    # fuzzy track match (Garage 61 vs iRacing spelling)
+    assert cmap.find_map("Demo Ring GP")["track"] == track
+    assert cmap.find_map("Spa") is None
+    # wrap-around: corner just after the line matches an entry just before it
+    class C:  # minimal stand-in
+        def __init__(self, pct): self.pct, self.index = pct, 0
+    cmap.save_map("Wrap Track", [{"pct": 0.995, "number": "1", "name": "Line"}])
+    c = cmap.apply_names([C(0.004)], "Wrap Track")[0]
+    assert c.name == "T1"
+
+
+def test_corner_names_flow_into_feedback_and_voice():
+    from simcoach import corners as cmap
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cs = detect_corners(demo.reference_lap())
+    cmap.save_map("Demo Ring - GP", [{"pct": cs[2].pct, "number": "3", "name": "Big Stop"}])
+    cfg = Config(record_laps=False)
+    eng = LiveEngine(cfg, DemoSource())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    r = client.get("/api/corners", params={"ref": "demo:ref"}).json()
+    assert r["map_track"] == "Demo Ring - GP" and r["corners"][2]["title"] == "T3 · Big Stop"
+    cmp = client.get("/api/compare", params={"mine": "demo:you", "ref": "demo:ref"}).json()
+    assert cmp["comparison"]["corners"][2]["title"] == "T3 · Big Stop"
+    # live: events carry the title, voice uses the name
+    eng.set_reference(demo.reference_lap())
+    _drive(eng, 2.4)
+    assert any(e.get("title") == "T3 · Big Stop" for e in eng.events)
+    assert any(v["text"].startswith("Big Stop,") for v in eng.coach.voice.log)
+    # saving through the API relabels the live reference immediately
+    client.post("/api/corners", json={"track": "Demo Ring - GP",
+                                      "corners": [{"pct": cs[2].pct, "number": "7", "name": "Renamed"}]})
+    assert eng.ref_corners[2].title == "T7 · Renamed"
+    assert client.get("/api/corners/export", params={"track": "Demo Ring - GP"}).status_code == 200
+    cmap.save_map("Demo Ring - GP", [])                                    # clean up for other tests

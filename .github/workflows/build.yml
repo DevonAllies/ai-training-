@@ -11,6 +11,10 @@ on:
         description: "Publish a GitHub Release (tag v<version from simcoach/__init__.py>)"
         type: boolean
         default: false
+      delete_release:
+        description: "Maintenance: delete the release (and its tag) with this tag name, e.g. beta"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -18,6 +22,7 @@ permissions:
 jobs:
   test:
     name: Tests (Linux)
+    if: ${{ !inputs.delete_release }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,3 +138,19 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
           make_latest: true
+
+  delete-release:
+    name: Delete release
+    if: github.event_name == 'workflow_dispatch' && inputs.delete_release != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.delete_release }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json name,tagName
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          echo "Deleted release $TAG"

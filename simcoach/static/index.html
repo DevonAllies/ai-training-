@@ -15,6 +15,7 @@
     <button class="tab" data-tab="laps">Garage 61 laps</button>
     <button class="tab" data-tab="analyze">Analyse</button>
     <button class="tab" data-tab="sessions">Sessions</button>
+    <button class="tab" data-tab="corners">Corners</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
   <div id="conn" class="pill">…</div>
@@ -214,6 +215,38 @@
     <div id="ss-msg" class="msg"></div>
   </div>
   <div id="ss-view"></div>
+</section>
+
+<!-- ============================ CORNERS ============================= -->
+<section id="tab-corners" class="tab-page">
+  <div class="card">
+    <div class="filters">
+      <label>Lap to label from <select id="cn-ref"></select></label>
+      <label>Track <input id="cn-track" type="text" style="min-width:320px"></label>
+      <button id="cn-load">Load corners</button>
+      <button id="cn-save" class="primary">Save names</button>
+      <button id="cn-export">Export</button>
+      <label class="filebtn">Import <input id="cn-import" type="file" accept=".json"></label>
+    </div>
+    <p class="muted small-text">SimCoach finds corners itself (C1, C2… = the slow points of the lap) because iRacing and
+      Garage 61 data contain no turn names. Enter the official turn number and name once per track – they are then used in
+      the overlay, voice coach, corner feedback and reports, for every car. Combine turns as "4-5" for a chicane.
+      Use the map and speed trace to see where each corner is. Maps can be exported and shared.</p>
+    <div id="cn-msg" class="msg"></div>
+  </div>
+  <div class="analyze-grid">
+    <div class="card">
+      <div class="label">Corners</div>
+      <table class="tbl" id="cn-table"><thead><tr><th>Detected</th><th>Where</th><th>Min speed</th><th>Turn #</th><th>Name</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <div class="label">Track map</div>
+      <canvas id="cn-map" height="300"></canvas>
+      <div id="cn-nomap" class="muted hidden">This lap has no GPS data – use the speed trace below.</div>
+      <div class="label">Speed trace</div>
+      <canvas id="cn-speed" height="160"></canvas>
+    </div>
+  </div>
 </section>
 
 <!-- ============================ SETTINGS ============================ -->
