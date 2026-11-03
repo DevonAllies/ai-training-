@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 
 import tempfile
@@ -290,7 +291,9 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if ext not in (".ibt", ".csv"):
             raise HTTPException(415, "Supported files: iRacing .ibt telemetry, or a lap .csv "
                                      "(Garage 61 export or SimCoach lap file).")
-        tmp = Path(tempfile.mkstemp(suffix=ext, prefix="upload_")[1])
+        fd, tmp_name = tempfile.mkstemp(suffix=ext, prefix="upload_")
+        os.close(fd)                    # mkstemp returns an open handle - close it (Windows locks open files)
+        tmp = Path(tmp_name)
         size = 0
         try:
             with open(tmp, "wb") as f:
@@ -329,7 +332,10 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
                         "driver": lap.meta.get("driver", "")}
                 laps = [lap]
         finally:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as exc:      # e.g. antivirus still scanning it - the OS temp cleanup will get it
+                log.warning("could not remove upload temp file %s: %s", tmp, exc)
         uid = uuid.uuid4().hex[:12]
         uploads[uid] = {"info": info, "laps": laps}
         while len(uploads) > 3:

@@ -557,8 +557,13 @@ def test_teammate_upload_and_set_reference(tmp_path):
     cfg = Config(record_laps=False)
     eng = LiveEngine(cfg, DemoSource())
     client = TestClient(create_app(eng, cfg))
-    r = client.post("/api/laps/upload", params={"filename": "team.ibt"}, content=p.read_bytes())
-    assert r.status_code == 200, r.text
+    import sys as _sys
+    fds = (lambda: len(os.listdir("/proc/self/fd"))) if _sys.platform.startswith("linux") else (lambda: 0)
+    before = fds()
+    for _ in range(3):
+        r = client.post("/api/laps/upload", params={"filename": "team.ibt"}, content=p.read_bytes())
+        assert r.status_code == 200, r.text
+    assert fds() <= before + 2          # no file handle leaked per upload (locks the file on Windows)
     d = r.json()
     assert d["info"]["driver"] == "Alex Teammate" and len(d["laps"]) >= 1
     r2 = client.post("/api/laps/import", json={"upload_id": d["upload_id"], "index": 0, "driver": "Max",
