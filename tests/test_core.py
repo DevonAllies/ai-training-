@@ -424,3 +424,25 @@ def test_update_api_endpoints():
     assert client.get("/api/update").json()["status"] == "idle"
     assert client.post("/api/update/check").json()["status"] == "ready"
     assert client.post("/api/config", json={"update_mode": "off"}).json()["update_mode"] == "off"
+
+
+def test_updater_falls_back_to_api_asset_url():
+    payload = b"setup-bytes" * 50
+    rel, sums = _fake_release(payload)
+    for a in rel["assets"]:
+        a["url"] = "https://api.github.com/repos/o/r/releases/assets/" + a["name"]
+    from simcoach.updater import Updater
+    calls = []
+
+    def get(url, **kw):
+        calls.append(url)
+        if url.endswith("/releases/latest"):
+            return _FakeResp(json_data=rel)
+        if "releases/download" in url:            # web download blocked on this network
+            return _FakeResp(status=404)
+        assert kw.get("headers", {}).get("Accept") == "application/octet-stream"
+        return _FakeResp(text=sums) if url.endswith("SHA256SUMS.txt") else _FakeResp(content=payload)
+    u = Updater(Config(update_mode="notify"), "0.3.0")
+    u.http.get = get
+    assert u.run_once()["status"] == "ready"
+    assert any("/releases/assets/" in c for c in calls)
