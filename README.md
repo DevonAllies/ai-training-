@@ -31,7 +31,7 @@ Windows SmartScreen may warn you because the installer isn't code-signed. Click 
 
 Also available:
 - **Portable zip** (`SimCoach-portable-x.y.z.zip`): unzip anywhere and run `SimCoach.exe`.
-- **Start Menu → SimCoach demo**: try everything without iRacing.
+- **Start Menu → SimCoach demo**: try everything without iRacing. To leave the demo, click **Exit demo & use iRacing** in the yellow banner, or just start the normal **SimCoach** shortcut, which closes the demo and starts live mode.
 
 ### Automatic updates
 
@@ -94,6 +94,19 @@ The overlay starts with SimCoach. By default it only appears when you are **on t
 - **Browser version:** `http://127.0.0.1:8061/overlay`. Use it as an OBS *Browser source*, on a second monitor, or on a tablet (start with `--host 0.0.0.0`). Add `?always=1` to show it outside practice too.
 
 All feedback is measured against your reference lap, which must have telemetry: a Garage 61 lap, one of your recorded laps, or your session best. Turn-in is detected from steering angle, at 30% of the reference driver's peak steering in that corner.
+
+## Teammate lap files
+
+You can use a teammate's lap as your reference without Garage 61. They send you a file, and you upload it on the **Laps** tab:
+
+1. Your teammate turns on telemetry logging in iRacing (**Alt+L** in the car, or permanently in the options) and drives.
+2. They send you the session's **`.ibt`** file from `Documents\iRacing\telemetry\`.
+3. Drop it on **Laps → Teammate lap files**. SimCoach finds every lap in it, fastest clean lap first, and reads the driver, car and track.
+4. Click **Use as my reference**. The lap is also saved under *Saved laps*, so you can pick it again later.
+
+Also accepted: a **Garage 61 lap CSV export** (enter the lap time if the file has no time column) or a **SimCoach lap file**.
+
+iRacing's **`.blap` / `.olap`** ghost files can't be used. They're a private format that isn't publicly documented, and guessing it could give you a wrong reference. The `.ibt` file contains the same lap plus full telemetry (speed, pedals, steering, gear, GPS).
 
 ## Corner numbers and names
 
@@ -183,6 +196,7 @@ python -m pytest tests           # run tests
 | `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
+| `simcoach/ibt.py` | iRacing .ibt telemetry reader (teammate lap files) |
 | `simcoach/corners.py` | Per-track corner numbers/names (corner maps) |
 | `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |

@@ -12,7 +12,7 @@
   <div class="brand"><img src="/static/icon.png" alt="" class="logo">SimCoach <span id="ver" class="muted small-text"></span></div>
   <nav>
     <button class="tab active" data-tab="live">Live</button>
-    <button class="tab" data-tab="laps">Garage 61 laps</button>
+    <button class="tab" data-tab="laps">Laps</button>
     <button class="tab" data-tab="analyze">Analyse</button>
     <button class="tab" data-tab="sessions">Sessions</button>
     <button class="tab" data-tab="corners">Corners</button>
@@ -21,6 +21,10 @@
   <div id="conn" class="pill">…</div>
 </header>
 
+<div id="demo-banner" class="update-banner demo hidden">
+  <span><b>Demo mode</b> – a simulated driver on a demo track. Your real iRacing telemetry isn't being used.</span>
+  <button id="demo-exit" class="primary small">Exit demo &amp; use iRacing</button>
+</div>
 <div id="update-banner" class="update-banner hidden">
   <span id="update-text"></span>
   <button id="update-install" class="primary small">Install &amp; restart</button>
@@ -115,6 +119,26 @@
 
 <!-- ============================== LAPS ============================== -->
 <section id="tab-laps" class="tab-page">
+  <div class="card" id="tm-card">
+    <div class="label">Teammate lap files – upload a lap and use it as your reference</div>
+    <div id="tm-drop" class="dropzone">
+      <b>Drop a file here</b> or <label class="filebtn">choose file <input id="tm-file" type="file" accept=".ibt,.csv,.blap,.olap"></label>
+      <div class="muted small-text">iRacing <b>.ibt</b> telemetry file (best) · Garage 61 lap CSV export · SimCoach lap file</div>
+    </div>
+    <div class="filters" style="margin-top:10px">
+      <label>Teammate name (optional) <input id="tm-name" type="text" placeholder="e.g. Max"></label>
+      <label>Lap time (only for CSVs without a time column) <input id="tm-laptime" type="text" placeholder="1:29.307"></label>
+    </div>
+    <div id="tm-msg" class="msg"></div>
+    <table class="tbl hidden" id="tm-laps"><thead><tr><th>Lap</th><th>Time</th><th>Clean</th><th></th></tr></thead><tbody></tbody></table>
+    <details class="muted small-text"><summary>How does my teammate get the .ibt file?</summary>
+      In iRacing, press <b>Alt+L</b> in the car to start telemetry logging (or turn it on permanently in the iRacing
+      options), drive the lap, then send the file from <code>Documents\iRacing\telemetry\</code> – one file per session,
+      named after car, track and date. SimCoach finds every lap in it and picks the fastest clean one.
+      iRacing's .blap/.olap ghost files use a private format that can't be read reliably, so they aren't supported.
+    </details>
+  </div>
+
   <div class="card">
     <div class="filters">
       <label>Car <select id="f-car"><option value="">Any car</option></select></label>
@@ -145,7 +169,7 @@
   </div>
 
   <div class="card">
-    <div class="label">My recorded laps (saved locally from live telemetry)</div>
+    <div class="label">Saved laps – yours and your teammates</div>
     <table class="tbl" id="local-laps">
       <thead><tr><th>Lap</th><th>Time</th><th>Car</th><th>Track</th><th>Date</th><th></th></tr></thead>
       <tbody></tbody>

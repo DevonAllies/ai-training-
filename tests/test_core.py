@@ -498,3 +498,105 @@ def test_corner_names_flow_into_feedback_and_voice():
     assert eng.ref_corners[2].title == "T7 · Renamed"
     assert client.get("/api/corners/export", params={"track": "Demo Ring - GP"}).status_code == 200
     cmap.save_map("Demo Ring - GP", [])                                    # clean up for other tests
+
+
+# ------------------------------------------------------- v6: teammate lap files (.ibt)
+def _make_ibt(path, laps=3, pit_lap=None):
+    from simcoach.ibt import write_ibt
+    ref = demo.reference_lap()
+    dt, L = 1 / 60, demo.TRACK_LENGTH
+    t, pct, lapn, spd, pit = [], [], [], [], []
+    p, tt, n = 0.9, 100.0, 0
+    while n <= laps:
+        v = float(np.interp(p, GRID, ref.speed, period=1))
+        t.append(tt); pct.append(p); lapn.append(n); spd.append(v); pit.append(n == pit_lap)
+        p += v * dt / L; tt += dt
+        if p >= 1:
+            p -= 1; n += 1
+    pct = np.array(pct)
+    ch = {"SessionTime": np.array(t), "LapDistPct": pct.astype(np.float32), "Lap": np.array(lapn, dtype=np.int32),
+          "Speed": np.array(spd, dtype=np.float32),
+          "Throttle": np.interp(pct, GRID, ref.throttle).astype(np.float32),
+          "Brake": np.interp(pct, GRID, ref.brake).astype(np.float32),
+          "Gear": np.interp(pct, GRID, ref.gear).astype(np.int32),
+          "SteeringWheelAngle": np.interp(pct, GRID, ref.steer).astype(np.float32),
+          "OnPitRoad": np.array(pit), "IsOnTrack": np.ones(len(t), bool),
+          "PlayerTrackSurface": np.full(len(t), 3, np.int32),
+          "Lat": np.interp(pct, GRID, ref.lat), "Lon": np.interp(pct, GRID, ref.lon)}
+    yml = ("---\nWeekendInfo:\n TrackDisplayName: Demo Ring\n TrackConfigName: GP\n TrackLength: 4.20 km\n"
+           "DriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: Alex Teammate\n"
+           "   CarScreenName: Demo GT3\n...\n")
+    write_ibt(path, ch, yml)
+    return ref
+
+
+def test_ibt_reader_extracts_laps(tmp_path):
+    from simcoach.ibt import IBTError, extract_laps
+    p = tmp_path / "team.ibt"
+    ref = _make_ibt(p, laps=3, pit_lap=2)
+    info, laps = extract_laps(p)
+    assert info["driver"] == "Alex Teammate" and info["track"] == "Demo Ring" and info["track_length"] == 4200
+    assert len(laps) == 2                                  # laps 1 and 2 complete (3 has no end crossing)
+    assert laps[0].valid and not laps[-1].valid            # pit lap sorted last and flagged
+    best = laps[0].lap
+    assert abs(best.lap_time - ref.lap_time) < 0.05
+    assert float(np.max(np.abs(best.time - ref.time))) < 0.05
+    assert best.has_map() and best.meta["track"] == "Demo Ring - GP"
+    p.unlink()                                             # memmap released -> deletable (matters on Windows)
+    bad = tmp_path / "bad.ibt"
+    bad.write_bytes(b"x" * 500)
+    with pytest.raises(IBTError):
+        extract_laps(bad)
+
+
+def test_teammate_upload_and_set_reference(tmp_path):
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    p = tmp_path / "team.ibt"
+    _make_ibt(p, laps=2)
+    cfg = Config(record_laps=False)
+    eng = LiveEngine(cfg, DemoSource())
+    client = TestClient(create_app(eng, cfg))
+    import sys as _sys
+    fds = (lambda: len(os.listdir("/proc/self/fd"))) if _sys.platform.startswith("linux") else (lambda: 0)
+    before = fds()
+    for _ in range(3):
+        r = client.post("/api/laps/upload", params={"filename": "team.ibt"}, content=p.read_bytes())
+        assert r.status_code == 200, r.text
+    assert fds() <= before + 2          # no file handle leaked per upload (locks the file on Windows)
+    d = r.json()
+    assert d["info"]["driver"] == "Alex Teammate" and len(d["laps"]) >= 1
+    r2 = client.post("/api/laps/import", json={"upload_id": d["upload_id"], "index": 0, "driver": "Max",
+                                               "set_reference": True}).json()
+    assert r2["label"].startswith("Max 1:26") and eng.reference is not None
+    assert eng.ref_label.startswith("Max")
+    assert any(l["file"] == r2["file"] for l in client.get("/api/local/laps").json())
+    # .blap is explained, not guessed
+    rb = client.post("/api/laps/upload", params={"filename": "x.blap"}, content=b"\x00" * 100)
+    assert rb.status_code == 415 and ".ibt" in rb.json()["detail"]
+    # Garage 61 CSV without a time column needs the lap time
+    csv = demo.demo_ref_csv().encode()
+    assert client.post("/api/laps/upload", params={"filename": "g61.csv"}, content=csv).status_code == 422
+    rc = client.post("/api/laps/upload", params={"filename": "g61.csv", "lap_time": 86.38}, content=csv)
+    assert rc.status_code == 200 and abs(rc.json()["laps"][0]["lap_time"] - 86.38) < 0.01
+
+
+def test_exit_demo_and_quit_endpoints():
+    from fastapi.testclient import TestClient
+    from simcoach.__main__ import relaunch_command
+    from simcoach.server import create_app
+    calls = []
+    cfg = Config()
+    demo_app = create_app(LiveEngine(cfg, DemoSource()), cfg, demo_mode=True,
+                          on_quit=lambda: calls.append("quit"), on_restart_live=lambda: calls.append("live"))
+    c = TestClient(demo_app)
+    assert c.post("/api/exit_demo").json()["restarting"] is True
+    assert c.post("/api/quit").json()["ok"] and calls == ["live", "quit"]
+    live = TestClient(create_app(LiveEngine(cfg, DemoSource()), cfg, demo_mode=False,
+                                 on_restart_live=lambda: calls.append("x")))
+    assert live.post("/api/exit_demo").json()["demo"] is False and "x" not in calls
+    # requests from another machine on the network are refused
+    remote = TestClient(demo_app, client=("192.168.1.50", 5000))
+    assert remote.post("/api/quit").status_code == 403
+    cmd = relaunch_command(8061)
+    assert "--takeover" in cmd and "--demo" not in cmd and "8061" in cmd

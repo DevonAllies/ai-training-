@@ -321,6 +321,51 @@ $("#g61-laps").addEventListener("click", async (ev) => {
   }
 });
 
+// ------------------------------------------------------------ teammate lap files
+const tm = { upload: null };
+function parseLapTime(s) {
+  s = (s || "").trim(); if (!s) return null;
+  const m = s.match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
+  return m ? (+(m[1] || 0)) * 60 + parseFloat(m[2]) : NaN;
+}
+async function uploadLapFile(f) {
+  const lt = parseLapTime($("#tm-laptime").value);
+  if (Number.isNaN(lt)) { msg($("#tm-msg"), "Lap time format: 1:29.307", "err"); return; }
+  msg($("#tm-msg"), `Reading ${f.name} (${(f.size / 1e6).toFixed(1)} MB)…`);
+  $("#tm-laps").classList.add("hidden");
+  try {
+    const q = new URLSearchParams({ filename: f.name }); if (lt) q.set("lap_time", lt);
+    const r = await fetch("/api/laps/upload?" + q, { method: "POST", body: f });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "Upload failed");
+    tm.upload = d;
+    if (!$("#tm-name").value && d.info.driver) $("#tm-name").value = d.info.driver;
+    const where = [d.info.track, d.info.car].filter(Boolean).join(" · ");
+    msg($("#tm-msg"), `${d.laps.length} lap${d.laps.length === 1 ? "" : "s"} found${where ? " – " + where : ""}. Fastest clean lap first.`, "ok");
+    $("#tm-laps tbody").innerHTML = d.laps.map((l, i) => `
+      <tr><td>${l.number ?? i + 1}</td><td>${fmtTime(l.lap_time)}${i === 0 ? ' <span class="muted">fastest</span>' : ""}</td>
+        <td>${l.valid ? "yes" : '<span class="muted">no (off-track / pits)</span>'}</td>
+        <td><button class="small primary" data-i="${l.index}" data-ref="1">Use as my reference</button>
+            <button class="small" data-i="${l.index}">Save only</button></td></tr>`).join("");
+    $("#tm-laps").classList.remove("hidden");
+  } catch (e) { msg($("#tm-msg"), e.message, "err"); }
+}
+$("#tm-file").addEventListener("change", (e) => { if (e.target.files[0]) uploadLapFile(e.target.files[0]); e.target.value = ""; });
+const drop = $("#tm-drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) uploadLapFile(f); });
+$("#tm-laps").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button"); if (!b || !tm.upload) return;
+  try {
+    const r = await api("/api/laps/import", { method: "POST", body: {
+      upload_id: tm.upload.upload_id, index: +b.dataset.i, driver: $("#tm-name").value.trim() || null,
+      set_reference: !!b.dataset.ref } });
+    msg($("#tm-msg"), b.dataset.ref ? `"${r.label}" is now your live reference. Go drive!` : `Saved "${r.label}" to your laps.`, "ok");
+    loadLocalLaps(); refreshReference();
+  } catch (e) { msg($("#tm-msg"), e.message, "err"); }
+});
+
 async function loadLocalLaps() {
   try {
     const laps = await api("/api/local/laps");
@@ -661,6 +706,18 @@ $("#btn-voice-test").addEventListener("click", async () => {
     msg($("#s-msg"), r.backend === "unavailable" ? "Windows voice not available – use the browser overlay with ?voice=1." : "Speaking…", "ok"); }
   catch (e) { msg($("#s-msg"), e.message, "err"); }
 });
+// ------------------------------------------------------------ demo mode
+$("#demo-exit").addEventListener("click", async () => {
+  $("#demo-exit").disabled = true;
+  $("#demo-banner span").textContent = "Restarting SimCoach in live mode…";
+  try { await api("/api/exit_demo", { method: "POST" }); } catch { /* the old instance may close mid-request */ }
+  for (let i = 0; i < 60; i++) {                       // wait for the live instance, then reload
+    await new Promise((r) => setTimeout(r, 1000));
+    try { const st = await api("/api/status"); if (!st.demo) { location.reload(); return; } } catch { /* restarting */ }
+  }
+  $("#demo-banner span").textContent = "Couldn't restart automatically – quit SimCoach from the tray and start it again.";
+});
+
 // ------------------------------------------------------------ updates
 function describeUpdate(u) {
   const when = u.checked_at ? " · checked " + new Date(u.checked_at * 1000).toLocaleTimeString() : "";
@@ -709,6 +766,7 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
     const st = await api("/api/status");
     state.units = st.config.units; applyUnits();
     $("#ver").textContent = "v" + st.version;
+    $("#demo-banner").classList.toggle("hidden", !st.demo);
     if (!st.config.has_token && !st.demo) showTab("settings");
   } catch { /* server not up yet */ }
   await refreshReference().catch(() => {});
