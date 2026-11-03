@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimCoach Overlay</title>
+<!--
+  Browser version of the in-game overlay. Use it as an OBS "Browser source"
+  (http://127.0.0.1:8061/overlay, transparent background), on a second monitor
+  or a tablet. Add ?always=1 to show it outside practice sessions too.
+-->
+<style>
+  :root { --bg: rgba(13,16,20,0.86); --fg: #e6e9ee; --muted: #8a94a3; --good: #33c27f; --bad: #ff5a5f; --warn: #f5b83d; }
+  html, body { margin: 0; background: transparent; color: var(--fg); font: 14px/1.25 "Segoe UI", system-ui, sans-serif; }
+  .ov { width: 380px; max-width: calc(100vw - 16px); margin: 8px; background: var(--bg); border-radius: 10px; padding: 10px 12px; box-sizing: border-box; transition: opacity .3s; }
+  .ov.hidden { opacity: 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .lbl { color: var(--muted); font-size: 10px; letter-spacing: .6px; text-transform: uppercase; }
+  .delta { font: 700 40px/1.05 Consolas, monospace; }
+  .good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .trend { font-weight: 700; font-size: 12px; min-height: 16px; }
+  .right { text-align: right; }
+  .pred { font: 700 18px Consolas, monospace; }
+  .cue { position: relative; height: 26px; border: 1px solid #2a313b; border-radius: 4px; margin: 8px 0; overflow: hidden; text-align: center; font-weight: 700; line-height: 26px; }
+  .cue .fill { position: absolute; left: 0; top: 0; bottom: 0; background: #5a2a2c; }
+  .cue span { position: relative; }
+  .cue.now { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .ev { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+  .ev .bar { width: 4px; height: 18px; border-radius: 2px; }
+  .ev .c { font: 700 12px Consolas, monospace; color: var(--muted); width: 32px; }
+  .ev.first .t { font-weight: 700; font-size: 15px; }
+  .events { min-height: 96px; }
+  .sectors { display: flex; gap: 4px; margin-top: 8px; }
+  .sectors div { flex: 1; text-align: center; font: 700 11px Consolas, monospace; padding: 4px 0; border-radius: 3px; background: #1b2027; }
+</style>
+</head>
+<body>
+<div id="ov" class="ov hidden">
+  <div class="top">
+    <div>
+      <div class="lbl">Delta</div>
+      <div id="delta" class="delta">--.--</div>
+      <div id="trend" class="trend"></div>
+    </div>
+    <div class="right">
+      <div id="stype" class="lbl"></div>
+      <div class="lbl" style="margin-top:6px">Predicted</div>
+      <div id="pred" class="pred">-:--.---</div>
+      <div id="ref" class="lbl"></div>
+    </div>
+  </div>
+  <div id="cue" class="cue"><div class="fill" id="cuefill"></div><span id="cuetext"></span></div>
+  <div id="events" class="events"></div>
+  <div id="sectors" class="sectors"></div>
+</div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const always = params.has("always");
+const speak = params.has("voice") && "speechSynthesis" in window;
+let lastVoiceId = null;
+function voice(list) {
+  if (!speak || !list || !list.length) return;
+  const maxId = list[list.length - 1].id;
+  if (lastVoiceId === null) { lastVoiceId = maxId; return; }      // don't replay history on load
+  list.filter((v) => v.id > lastVoiceId).forEach((v) => {
+    if (speechSynthesis.pending) speechSynthesis.cancel();        // never let phrases pile up
+    const u = new SpeechSynthesisUtterance(v.text); u.rate = 1.1; speechSynthesis.speak(u);
+  });
+  lastVoiceId = maxId;
+}
+const $ = (id) => document.getElementById(id);
+const fmtD = (d) => d === null || d === undefined ? "--.--" : (d >= 0 ? "+" : "−") + Math.abs(d).toFixed(2);
+const fmtT = (s) => { if (!(s > 0)) return "-:--.---"; const m = Math.floor(s / 60); return m + ":" + (s - m * 60).toFixed(3).padStart(6, "0"); };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const SEV = { good: "var(--good)", bad: "var(--bad)", warn: "var(--warn)", ok: "var(--fg)" };
+
+function render(st) {
+  $("ov").classList.toggle("hidden", !(st.visible || (always && st.mode !== "off" && st.delta !== undefined)));
+  const d = st.delta;
+  $("delta").textContent = fmtD(d);
+  $("delta").className = "delta " + (d == null ? "" : d > 0 ? "bad" : "good");
+  const tr = st.trend;
+  if (tr != null && Math.abs(tr) > 0.03) {
+    $("trend").textContent = (tr > 0 ? "LOSING " : "GAINING ") + Math.abs(tr).toFixed(2) + "s here";
+    $("trend").className = "trend " + (tr > 0 ? "bad" : "good");
+  } else { $("trend").textContent = st.has_reference ? "" : "No reference lap yet"; $("trend").className = "trend"; }
+  $("stype").textContent = st.session_type || "";
+  $("pred").textContent = fmtT(st.predicted);
+  $("ref").textContent = "Ref " + fmtT(st.ref_lap_time);
+
+  const cue = st.brake_cue, el = $("cue");
+  if (cue) {
+    const dist = st.units === "metric" ? cue.m + " m" : Math.round(cue.m * 3.281) + " ft";
+    el.classList.toggle("now", cue.m <= 0);
+    $("cuefill").style.width = cue.m <= 0 ? "0" : Math.max(0, Math.min(100, (1 - cue.m / 250) * 100)) + "%";
+    $("cuetext").textContent = cue.m <= 0 ? `BRAKE (${cue.corner})` : `${cue.corner}  brake in ${dist}`;
+  } else {
+    el.classList.remove("now"); $("cuefill").style.width = "0";
+    const f = st.focus || {};
+    if (f.active && f.name) {
+      const dots = Array.from({ length: f.needed }, (_, i) => i < f.streak ? "●" : "○").join(" ");
+      $("cuetext").innerHTML = `<span class="warn">DRILL ${esc(f.name)}</span> &nbsp;${dots}` +
+        (f.last_loss != null ? ` &nbsp;<span class="lbl">last ${fmtD(f.last_loss)}s</span>` : "");
+    } else $("cuetext").textContent = st.next_corner ? "Next: " + st.next_corner : "";
+  }
+  voice(st.voice);
+
+  const evs = (st.events || []).slice().reverse();
+  $("events").innerHTML = evs.length ? evs.map((e, i) => `
+    <div class="ev ${i === 0 ? "first" : ""}"><div class="bar" style="background:${SEV[e.severity]}"></div>
+      <div class="c">${esc(e.corner)}</div><div class="t" style="${i === 0 ? "color:" + SEV[e.severity] : ""}">${esc(e.text)}</div></div>`).join("")
+    : '<div class="lbl" style="padding-top:6px">Corner feedback appears here as you drive.</div>';
+
+  const n = st.sector_count || 0, done = {};
+  (st.sectors || []).forEach((s) => (done[s.sector] = s));
+  let html = "";
+  for (let i = 1; i <= n; i++) {
+    const s = done[i];
+    let bg = "#1b2027", txt = "S" + i;
+    if (s && s.delta != null) { bg = s.delta <= 0 ? "var(--good)" : s.delta < 0.3 ? "#7a2a2d" : "var(--bad)"; txt = fmtD(s.delta); }
+    else if (s) { bg = "#2a313b"; txt = s.time.toFixed(1); }
+    html += `<div style="background:${bg}">${txt}</div>`;
+  }
+  $("sectors").innerHTML = html;
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws/overlay`);
+  ws.onmessage = (e) => render(JSON.parse(e.data));
+  ws.onclose = () => { $("ov").classList.add("hidden"); setTimeout(connect, 1500); };
+}
+connect();
+</script>
+</body>
+</html>

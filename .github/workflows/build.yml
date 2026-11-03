@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest httpx
+      - run: python -m pytest -q tests
+
+  windows:
+    name: Windows installer
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Work out version
+        id: ver
+        shell: pwsh
+        run: |
+          $base = (Select-String -Path simcoach/__init__.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart("v") }
+          else { $v = "$base.${{ github.run_number }}" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building SimCoach $v"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller pytest httpx
+
+      - name: Tests (Windows)
+        run: python -m pytest -q tests
+
+      - name: Build SimCoach.exe
+        run: pyinstaller --noconfirm --distpath dist --workpath build packaging/simcoach.spec
+
+      - name: Smoke test the built app
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\SimCoach\SimCoach.exe -ArgumentList "--demo","--no-browser","--no-overlay","--no-tray","--port","8077" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $s = Invoke-RestMethod http://127.0.0.1:8077/api/status
+              if ($s.version) { $ok = $true; Write-Host "SimCoach $($s.version) is up: $($s.live.status)" }
+            } catch {}
+          }
+          Invoke-WebRequest http://127.0.0.1:8077/ -UseBasicParsing | Out-Null
+          Invoke-WebRequest http://127.0.0.1:8077/overlay -UseBasicParsing | Out-Null
+          $sessions = Invoke-RestMethod http://127.0.0.1:8077/api/sessions
+          Write-Host "Imported sessions: $($sessions.Count)"
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { Get-Content "$env:APPDATA\SimCoach\simcoach.log" -ErrorAction SilentlyContinue; exit 1 }
+          if ($sessions.Count -lt 1) { Write-Error "sample data not bundled"; exit 1 }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" packaging\SimCoach.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Portable zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\SimCoach\* -DestinationPath "dist\SimCoach-portable-${{ steps.ver.outputs.version }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SimCoach-${{ steps.ver.outputs.version }}
+          path: |
+            dist/SimCoach-Setup-*.exe
+            dist/SimCoach-portable-*.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    if: github.ref_type == 'tag'
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
