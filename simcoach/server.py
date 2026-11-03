@@ -51,6 +51,13 @@ class CornerMapIn(BaseModel):
     corners: list[dict]
 
 
+class LapImportIn(BaseModel):
+    upload_id: str
+    index: int = 0
+    driver: str | None = None          # override the teammate's name
+    set_reference: bool = False
+
+
 class FocusIn(BaseModel):
     action: str = "auto"               # "auto" | "corner" | "stop"
     corner: int | None = None
@@ -241,6 +248,90 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         return out
 
     # ------------------------------------------------------------------ local
+    # ------------------------------------------------- teammate lap files
+    uploads: dict[str, dict] = {}       # bounded: last 3 uploads only
+
+    @app.post("/api/laps/upload")
+    async def upload_lap_file(request: Request, filename: str = "lap.ibt", lap_time: float | None = None):
+        """Upload a teammate's .ibt telemetry file or a lap CSV; returns the laps found."""
+        import re as _re
+        import uuid
+        ext = Path(filename).suffix.lower()
+        if ext in (".blap", ".olap"):
+            raise HTTPException(415, "iRacing .blap/.olap ghost files use a private format that can't be read "
+                                     "reliably. Ask your teammate for the .ibt telemetry file of that session "
+                                     "instead (Alt+L in the car turns telemetry logging on; files are in "
+                                     "Documents\\iRacing\\telemetry). It contains the same lap and more.")
+        if ext not in (".ibt", ".csv"):
+            raise HTTPException(415, "Supported files: iRacing .ibt telemetry, or a lap .csv "
+                                     "(Garage 61 export or SimCoach lap file).")
+        tmp = Path(tempfile.mkstemp(suffix=ext, prefix="upload_")[1])
+        size = 0
+        try:
+            with open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 4_000_000_000:
+                        raise HTTPException(413, "File too large")
+                    f.write(chunk)
+            if size == 0:
+                raise HTTPException(400, "Empty upload")
+            if ext == ".ibt":
+                from .ibt import IBTError, extract_laps
+                try:
+                    info, found = await asyncio.to_thread(extract_laps, tmp)
+                except IBTError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+                laps = [x.lap for x in found]
+                if not laps:
+                    raise HTTPException(422, "No complete laps found in this telemetry file.")
+            else:
+                text = tmp.read_text(encoding="utf-8", errors="replace")
+                is_simcoach = text.startswith("#")
+                if is_simcoach:
+                    lap = Lap.load(tmp)
+                else:
+                    has_time = bool(_re.search(r"(?im)^[^\n]*\b(lapcurrentlaptime|sessiontime|time)\b", text.split("\n", 1)[0]))
+                    if not lap_time and not has_time:
+                        raise HTTPException(422, "This CSV has no time column - enter the lap time and upload again.")
+                    try:
+                        lap = parse_csv(text, lap_time=lap_time)
+                    except ValueError as exc:
+                        raise HTTPException(422, f"Could not read this CSV: {exc}") from exc
+                    lap.label = f"Teammate {fmt_time(lap.lap_time)}"
+                    lap.meta = {"source": "csv", "track": engine.track_name() or ""}
+                info = {"track": lap.meta.get("track", ""), "car": lap.meta.get("car", ""),
+                        "driver": lap.meta.get("driver", "")}
+                laps = [lap]
+        finally:
+            tmp.unlink(missing_ok=True)
+        uid = uuid.uuid4().hex[:12]
+        uploads[uid] = {"info": info, "laps": laps}
+        while len(uploads) > 3:
+            uploads.pop(next(iter(uploads)))
+        return {"upload_id": uid, "info": info, "laps": [
+            {"index": i, "number": l.meta.get("lap"), "lap_time": round(l.lap_time, 3),
+             "valid": l.meta.get("valid", True), "label": l.label} for i, l in enumerate(laps)]}
+
+    @app.post("/api/laps/import")
+    def import_lap(body: LapImportIn):
+        up = uploads.get(body.upload_id)
+        if not up or not (0 <= body.index < len(up["laps"])):
+            raise HTTPException(404, "Upload expired - please upload the file again.")
+        lap = up["laps"][body.index]
+        driver = (body.driver or lap.meta.get("driver") or "Teammate").strip()[:40]
+        lap.label = f"{driver} {fmt_time(lap.lap_time)}"
+        lap.meta = dict(lap.meta, driver=driver, source="teammate:" + str(lap.meta.get("source", "")))
+        import datetime as _dt
+        import re as _re
+        safe = _re.sub(r"[^A-Za-z0-9]+", "_", f"{driver}_{lap.meta.get('track', '')}").strip("_")[:80]
+        name = f"{_dt.datetime.now():%Y%m%d_%H%M%S}_teammate_{safe}_{lap.lap_time:.3f}.csv"
+        lap.meta.setdefault("date", _dt.datetime.now().isoformat(timespec="seconds"))
+        lap.save(laps_dir() / name)
+        if body.set_reference:
+            engine.set_reference(lap)
+        return {"file": name, "label": lap.label, "reference": engine.ref_label if body.set_reference else None}
+
     @app.get("/api/local/laps")
     def local_laps():
         out = []
