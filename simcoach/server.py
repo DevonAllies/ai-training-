@@ -45,6 +45,7 @@ class TokenIn(BaseModel):
     focus_target: float | None = None
     start_with_windows: bool | None = None
     update_mode: str | None = None
+    lan_access: bool | None = None
 
 
 class CornerMapIn(BaseModel):
@@ -94,7 +95,8 @@ class RefIn(BaseModel):
 
 
 def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, updater=None,
-               on_quit=None, on_restart_live=None) -> FastAPI:
+               on_quit=None, on_restart_live=None, on_restart=None, bind_host: str = "127.0.0.1",
+               port: int = 8061) -> FastAPI:
     app = FastAPI(title="SimCoach", version=__version__)
     state = {"g61": Garage61Client(config.garage61_token)}
     if engine.on_session_change is None:
@@ -167,10 +169,42 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def favicon():
         return FileResponse(STATIC / "icon.png")
 
-    def _local_only(request: Request):
+    from . import lan
+
+    @app.middleware("http")
+    async def lan_guard(request: Request, call_next):
+        """Tablets/phones on the network may use the coaching screens, not change settings."""
         host = request.client.host if request.client else ""
-        if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        if not lan.is_local(host) and not lan.allowed_remote(request.method, request.url.path):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Only allowed on the SimCoach PC"}, status_code=403)
+        return await call_next(request)
+
+    def _local_only(request: Request):
+        if not lan.is_local(request.client.host if request.client else ""):
             raise HTTPException(403, "Only allowed from this PC")
+
+    @app.get("/api/lan")
+    def lan_status(request: Request):
+        active = bind_host not in ("127.0.0.1", "localhost", "::1")
+        return {"enabled": config.lan_access, "active": active, "needs_restart": config.lan_access != active,
+                "urls": lan.lan_urls(port) if (active or config.lan_access) else [], "port": port,
+                "viewer_is_remote": not lan.is_local(request.client.host if request.client else "")}
+
+    @app.get("/api/lan/qr.svg")
+    def lan_qr(url: str):
+        from fastapi.responses import Response
+        if not url.startswith("http://") or len(url) > 200:
+            raise HTTPException(400, "Bad address")
+        return Response(lan.qr_svg(url), media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/restart")
+    def restart(request: Request):
+        _local_only(request)
+        if on_restart is None:
+            raise HTTPException(400, "Not available")
+        on_restart()
+        return {"ok": True}
 
     @app.post("/api/quit")
     def quit_app(request: Request):
@@ -241,6 +275,8 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             config.update_mode = body.update_mode
             if updater and body.update_mode != "off":
                 updater.check_soon()
+        if body.lan_access is not None:
+            config.lan_access = body.lan_access
         if body.start_with_windows is not None:
             from . import autostart
             try:

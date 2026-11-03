@@ -880,6 +880,8 @@ async function loadSettings() {
   $("#s-opacity").value = c.overlay_opacity || 0.85;
   $("#s-voice").value = c.voice_mode || "cues";
   $("#s-update").value = c.update_mode || "auto";
+  $("#s-lan").checked = !!c.lan_access;
+  refreshLan();
   refreshUpdate();
   $("#s-autostart").checked = !!c.start_with_windows;
   $("#s-autostart-row").classList.toggle("hidden", !c.autostart_supported);
@@ -895,6 +897,7 @@ $("#btn-save").addEventListener("click", async () => {
     voice_mode: $("#s-voice").value, voice_native: $("#s-voice-native").checked,
     voice_practice_only: $("#s-voice-practice").checked,
     update_mode: $("#s-update").value,
+    lan_access: $("#s-lan").checked,
     ...(document.querySelector("#s-autostart-row").classList.contains("hidden") ? {} : { start_with_windows: $("#s-autostart").checked }),
     focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
@@ -917,6 +920,35 @@ $("#btn-voice-test").addEventListener("click", async () => {
     msg($("#s-msg"), r.backend === "unavailable" ? "Windows voice not available – use the browser overlay with ?voice=1." : "Speaking…", "ok"); }
   catch (e) { msg($("#s-msg"), e.message, "err"); }
 });
+// ------------------------------------------------------------ tablet / phone (LAN + QR)
+async function refreshLan() {
+  let l; try { l = await api("/api/lan"); } catch { return; }
+  $("#lan-box").classList.toggle("hidden", !(l.enabled || l.active));
+  $("#lan-restart").classList.toggle("hidden", !l.needs_restart || l.viewer_is_remote);
+  $("#lan-ready").classList.toggle("hidden", !l.active || !l.urls.length);
+  if (l.active && l.urls.length) {
+    const sel = $("#lan-url"), keep = sel.value;
+    sel.innerHTML = l.urls.map((u) => `<option>${esc(u)}</option>`).join("");
+    if (keep && l.urls.includes(keep)) sel.value = keep;
+    $("#lan-qr").src = "/api/lan/qr.svg?url=" + encodeURIComponent(sel.value);
+  }
+  if (l.viewer_is_remote) { $("#s-lan").disabled = true; $("#btn-save").disabled = true; }
+}
+$("#lan-url").addEventListener("change", (e) => { $("#lan-qr").src = "/api/lan/qr.svg?url=" + encodeURIComponent(e.target.value); });
+$("#s-lan").addEventListener("change", async () => {
+  try { await api("/api/config", { method: "POST", body: { lan_access: $("#s-lan").checked } }); } catch (e) { msg($("#s-msg"), e.message, "err"); }
+  refreshLan();
+});
+$("#btn-restart").addEventListener("click", async () => {
+  $("#btn-restart").disabled = true; $("#lan-restart").firstChild.textContent = "Restarting… ";
+  try { await api("/api/restart", { method: "POST" }); } catch { /* closing */ }
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try { const l = await api("/api/lan"); if (!l.needs_restart) { showTab("settings"); return; } } catch { /* restarting */ }
+  }
+  msg($("#s-msg"), "Couldn't restart automatically – quit SimCoach from the tray and start it again.", "err");
+});
+
 // ------------------------------------------------------------ demo mode
 $("#demo-exit").addEventListener("click", async () => {
   $("#demo-exit").disabled = true;

@@ -137,3 +137,5 @@ details summary { cursor: pointer; margin-top: 8px; }
 .plan-step { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 8px 0; background: rgba(62,166,255,.05); }
 .plan-step b { display: block; }
 #corner-table tr { cursor: pointer; }
+.lan-qr { background: #fff; padding: 10px; border-radius: 8px; display: inline-block; margin: 6px 0; }
+.lan-qr img { width: 200px; height: 200px; display: block; image-rendering: pixelated; }
