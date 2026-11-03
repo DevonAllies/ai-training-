@@ -18,12 +18,12 @@ Everything runs on your PC. The dashboard is a local web page at `http://127.0.0
 
 ## Install (Windows)
 
-**Recommended: the installer**
+**SimCoach is a single, self-contained app.** The installer contains everything: the Python runtime, every library, the dashboard, the overlay and the voice coach. You don't install Python or anything else, and an internet connection is only needed for Garage 61 and updates.
 
-1. Open the repository's **Releases** page on GitHub and download **`SimCoach-Setup-x.y.z.exe`**. Builds of any branch are also under **Actions → Build → (latest run) → Artifacts**.
+1. Open the repository's **Releases** page on GitHub and download **`SimCoach-Setup-x.y.z.exe`**.
 2. Run it. No admin rights are needed. You can choose a desktop shortcut and *Start with Windows*.
 3. SimCoach starts in the **system tray** (next to the clock), opens the dashboard in your browser, and shows the overlay over iRacing in practice sessions.
-   - Right-click the tray icon to open the dashboard, change overlay or voice mode, or quit.
+   - Right-click the tray icon to open the dashboard, change overlay or voice mode, check for updates, or quit.
    - Clicking the shortcut again while it's running just reopens the dashboard.
 4. To uninstall, go to Windows **Settings → Apps → SimCoach**. Your laps, settings and imports in `%APPDATA%\SimCoach` are kept.
 
@@ -33,6 +33,24 @@ Also available:
 - **Portable zip** (`SimCoach-portable-x.y.z.zip`): unzip anywhere and run `SimCoach.exe`.
 - **Start Menu → SimCoach demo**: try everything without iRacing.
 
+### Automatic updates
+
+SimCoach keeps itself up to date from this repository's GitHub Releases:
+
+1. It checks shortly after starting and then every 6 hours. You can also use **Settings → Updates → Check now** or the tray menu.
+2. It downloads the new installer in the background and **verifies its SHA-256 checksum** against the one published with the release. If there's no checksum or it doesn't match, it won't install.
+3. It **installs silently and restarts itself**, but never while you're on track. It waits until you're back in the garage or iRacing is closed.
+
+Modes in **Settings → Updates**:
+
+| Mode | What it does |
+| --- | --- |
+| *Install automatically when I'm not driving* | Default |
+| *Download, then ask me* | Shows an "Install & restart" banner in the dashboard |
+| *Off* | Never checks for updates |
+
+Your laps and settings are kept across updates.
+
 **From source (developers)**
 
 Install Python 3.10+ (tick "Add python.exe to PATH"), then run `install.bat` once and `run.bat` to start. `build_exe.bat` builds `SimCoach.exe`, and the installer too if [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed.
@@ -41,15 +59,14 @@ Install Python 3.10+ (tick "Add python.exe to PATH"), then run `install.bat` onc
 
 ### Releases (maintainers)
 
-Every push runs **tests on Linux and Windows**, builds `SimCoach.exe` with PyInstaller, smoke-tests it, and builds the installer with Inno Setup. To publish a release:
+Every push runs **tests on Linux and Windows**, builds `SimCoach.exe` with PyInstaller, smoke-tests it, and builds the installer with Inno Setup.
 
-```bash
-# bump __version__ in simcoach/__init__.py (and pyproject.toml), commit, then:
-git tag v0.2.0
-git push origin v0.2.0
-```
+To publish a release, which every installed copy then auto-updates to:
 
-The workflow attaches the installer and portable zip to a GitHub Release automatically.
+1. Bump `__version__` in `simcoach/__init__.py` and `pyproject.toml`, then merge to `main`.
+2. On GitHub, go to **Actions → Build → Run workflow**, choose branch `main`, tick **Publish a GitHub Release**, and click **Run**.
+
+Alternatively, push a tag `vX.Y.Z`. Either way, the workflow creates the release with the installer, portable zip and `SHA256SUMS.txt` attached.
 
 ## Connect Garage 61
 
@@ -149,6 +166,7 @@ python -m pytest tests           # run tests
 | `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
 | `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
+| `simcoach/updater.py` | Auto-update from GitHub Releases (checksum-verified, silent install) |
 | `simcoach/tray.py` / `autostart.py` | System-tray icon, *Start with Windows* |
 | `packaging/` | PyInstaller spec, Inno Setup installer script, icon |
 | `.github/workflows/build.yml` | CI: tests, Windows build, installer, releases |

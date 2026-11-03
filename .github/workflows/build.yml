@@ -76,6 +76,8 @@ jobs:
           }
           Invoke-WebRequest http://127.0.0.1:8077/ -UseBasicParsing | Out-Null
           Invoke-WebRequest http://127.0.0.1:8077/overlay -UseBasicParsing | Out-Null
+          $upd = Invoke-RestMethod http://127.0.0.1:8077/api/update
+          Write-Host "Updater: $($upd.status) (current $($upd.current))"
           $sessions = Invoke-RestMethod http://127.0.0.1:8077/api/sessions
           Write-Host "Imported sessions: $($sessions.Count)"
           Stop-Process -Id $p.Id -Force
