@@ -193,11 +193,29 @@ class OverlayWindow:
                       fill=FG, font=font(14, True, True))
         c.create_text(W - 12 * k, 58 * k, anchor="ne", text="REF " + fmt_time(st.get("ref_lap_time")),
                       fill=MUTED, font=font(8, mono=True))
+        fuel = st.get("fuel") or {}
+        if fuel.get("laps") is not None:
+            c.create_text(W - 12 * k, 72 * k, anchor="ne",
+                          text=f"FUEL {fuel['laps']:.1f} laps" + ("  SAVE" if fuel.get("save_mode") else ""),
+                          fill="#3ea6ff" if fuel.get("save_mode") else MUTED, font=font(8, True, True))
 
         # --- brake cue
         y = 88 * k
         cue = st.get("brake_cue")
-        if cue:
+        if cue and cue.get("kind") == "lift":
+            m = cue["m"]
+            lift_col = "#3ea6ff"
+            if m <= 0:
+                c.create_rectangle(12 * k, y, W - 12 * k, y + 26 * k, fill=lift_col, width=0)
+                c.create_text(W / 2, y + 13 * k, text=f"LIFT  ({cue['corner']})", fill="#04121f",
+                              font=font(13, True))
+            else:
+                frac = max(0.0, min(1.0, 1 - m / 250))
+                c.create_rectangle(12 * k, y, W - 12 * k, y + 26 * k, outline="#2a313b", width=1)
+                c.create_rectangle(12 * k, y, 12 * k + (W - 24 * k) * frac, y + 26 * k, fill="#173a5c", width=0)
+                dist = f"{m} m" if st.get("units") == "metric" else f"{round(m * 3.281)} ft"
+                c.create_text(W / 2, y + 13 * k, text=f"{cue['corner']}  lift in {dist}", fill=FG, font=font(11, True))
+        elif cue:
             m = cue["m"]
             if m <= 0:
                 c.create_rectangle(12 * k, y, W - 12 * k, y + 26 * k, fill=BAD, width=0)

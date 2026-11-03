@@ -25,6 +25,8 @@
   .cue .fill { position: absolute; left: 0; top: 0; bottom: 0; background: #5a2a2c; }
   .cue span { position: relative; }
   .cue.now { background: var(--bad); color: #fff; border-color: var(--bad); }
+  .cue.lift .fill { background: #173a5c; }
+  .cue.lift.now { background: #3ea6ff; color: #04121f; border-color: #3ea6ff; }
   .ev { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
   .ev .bar { width: 4px; height: 18px; border-radius: 2px; }
   .ev .c { font: 700 12px Consolas, monospace; color: var(--muted); width: 32px; }
@@ -47,6 +49,7 @@
       <div class="lbl" style="margin-top:6px">Predicted</div>
       <div id="pred" class="pred">-:--.---</div>
       <div id="ref" class="lbl"></div>
+      <div id="fuel" class="lbl"></div>
     </div>
   </div>
   <div id="cue" class="cue"><div class="fill" id="cuefill"></div><span id="cuetext"></span></div>
@@ -89,14 +92,18 @@ function render(st) {
   $("pred").textContent = fmtT(st.predicted);
   $("ref").textContent = "Ref " + fmtT(st.ref_lap_time);
 
+  const f = st.fuel || {};
+  $("fuel").textContent = f.laps != null ? `Fuel ${f.laps.toFixed(1)} laps${f.save_mode ? " · SAVE" : ""}` : "";
   const cue = st.brake_cue, el = $("cue");
   if (cue) {
     const dist = st.units === "metric" ? cue.m + " m" : Math.round(cue.m * 3.281) + " ft";
+    const word = cue.kind === "lift" ? "LIFT" : "BRAKE";
+    el.classList.toggle("lift", cue.kind === "lift");
     el.classList.toggle("now", cue.m <= 0);
     $("cuefill").style.width = cue.m <= 0 ? "0" : Math.max(0, Math.min(100, (1 - cue.m / 250) * 100)) + "%";
-    $("cuetext").textContent = cue.m <= 0 ? `BRAKE (${cue.corner})` : `${cue.corner}  brake in ${dist}`;
+    $("cuetext").textContent = cue.m <= 0 ? `${word} (${cue.corner})` : `${cue.corner}  ${word.toLowerCase()} in ${dist}`;
   } else {
-    el.classList.remove("now"); $("cuefill").style.width = "0";
+    el.classList.remove("now", "lift"); $("cuefill").style.width = "0";
     const f = st.focus || {};
     if (f.active && f.name) {
       const dots = Array.from({ length: f.needed }, (_, i) => i < f.streak ? "●" : "○").join(" ");

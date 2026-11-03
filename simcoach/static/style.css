@@ -129,3 +129,11 @@ a { color: var(--accent); }
 .dropzone.over { border-color: var(--accent); background: rgba(62,166,255,.08); }
 details summary { cursor: pointer; margin-top: 8px; }
 .update-banner.demo { background: rgba(245,184,61,.14); }
+
+.badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin: 1px 2px 1px 0; background: #232a33; }
+.badge.bad { background: rgba(255,90,95,.18); color: var(--bad); }
+.badge.warn { background: rgba(245,184,61,.18); color: var(--ref); }
+.badge.good { background: rgba(51,194,127,.15); color: var(--good); }
+.plan-step { border-left: 3px solid var(--accent); padding: 6px 10px; margin: 8px 0; background: rgba(62,166,255,.05); }
+.plan-step b { display: block; }
+#corner-table tr { cursor: pointer; }

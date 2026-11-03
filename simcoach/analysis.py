@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
+from .control import corner_control, corner_line, gear_ratios, line_offset, shift_summary
 from .lap import GRID, N_BINS, Lap
 
 MS_TO_KMH = 3.6
@@ -59,6 +60,19 @@ class CornerReport:
     issues: list[str] = field(default_factory=list)   # issue codes, most important first
     title: str = ""
     spoken: str = ""
+    # racing line (GPS): + = wide / towards the outside, - = tight / inside
+    line_entry_m: float | None = None
+    line_apex_m: float | None = None
+    line_exit_m: float | None = None
+    # car control
+    understeer: float | None = None      # >1.25 = more lock for less rotation than the reference
+    oversteer_m: float | None = None     # metres of opposite lock
+    corrections_diff: int | None = None  # extra steering reversals vs the reference
+    wheelspin_m_diff: float | None = None
+    abs_m_diff: float | None = None
+    gear_apex: int | None = None
+    gear_apex_ref: int | None = None
+    gear_apex_diff: int | None = None
 
     def to_dict(self) -> dict:
         return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in asdict(self).items()}
@@ -147,7 +161,8 @@ def turn_in_bin(lap: Lap, a: int, limit: int, thr: float | None) -> int | None:
 
 
 # ------------------------------------------------------------------ compare
-def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
+def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float, line: dict | None = None,
+                   ratios: tuple | None = None) -> CornerReport:
     a, m, b = c.start, c.apex, c.end
     d = delta_trace(me, ref)
     base = d[a - 1] if a > 0 else 0.0
@@ -202,6 +217,9 @@ def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
         min_speed_diff_kmh=min_speed_diff, exit_speed_diff_kmh=exit_speed_diff,
         throttle_point_m=throttle_point_m, turn_in_m=turn_in_m, coast_m_diff=coast_diff,
         trail_m_diff=trail_diff, title=c.title, spoken=c.spoken,
+        **corner_line(line, a, r_ti, ref_apex, b),
+        **corner_control(me, ref, a, my_apex, ref_apex, b, r_ti, thr, bin_m,
+                         *(ratios if ratios else (None, None))),
     )
     rep.issues = detect_issues(rep)
     rep.tips = coaching_tips(rep)
@@ -220,6 +238,14 @@ SHORT_CUES = {
     "coasting": "less coasting",
     "late_throttle": "throttle earlier",
     "low_exit": "better exit",
+    "wide_apex": "hit the apex",
+    "tight_entry": "use the outside",
+    "understeer": "slow in, less lock",
+    "oversteer": "smoother on exit",
+    "busy_steering": "smooth hands",
+    "wheelspin": "squeeze the throttle",
+    "abs_heavy": "less brake pressure",
+    "gear_apex": "check your gear",
 }
 
 ISSUE_LABELS = {
@@ -233,6 +259,14 @@ ISSUE_LABELS = {
     "coasting": "Coasting between brake and throttle",
     "late_throttle": "Late on the throttle",
     "low_exit": "Slow corner exit",
+    "wide_apex": "Missing the apex (line too wide)",
+    "tight_entry": "Not using the outside on entry",
+    "understeer": "Understeer (more lock, less rotation)",
+    "oversteer": "Oversteer / catching slides",
+    "busy_steering": "Too many steering corrections",
+    "wheelspin": "Wheelspin on exit",
+    "abs_heavy": "Leaning on ABS (too much brake pressure)",
+    "gear_apex": "Different gear at the apex",
 }
 
 
@@ -261,6 +295,24 @@ def detect_issues(r: CornerReport) -> list[str]:
         out.append("late_throttle")
     if r.exit_speed_diff_kmh < -3 and r.exit_lost > 0.02:
         out.append("low_exit")
+    # racing line (GPS)
+    if r.line_apex_m is not None and r.line_apex_m > 1.5 and (r.min_speed_diff_kmh < -1 or r.time_lost > 0.05):
+        out.append("wide_apex")
+    if r.line_entry_m is not None and r.line_entry_m < -1.5 and r.entry_lost > 0.02:
+        out.append("tight_entry")
+    # car control
+    if r.oversteer_m is not None and r.oversteer_m >= 4:
+        out.append("oversteer")
+    if r.understeer is not None and r.understeer > 1.3 and (r.min_speed_diff_kmh < -1 or r.exit_lost > 0.02):
+        out.append("understeer")
+    if r.wheelspin_m_diff is not None and r.wheelspin_m_diff >= 6:
+        out.append("wheelspin")
+    if r.abs_m_diff is not None and r.abs_m_diff >= 10:
+        out.append("abs_heavy")
+    if r.corrections_diff is not None and r.corrections_diff >= 3:
+        out.append("busy_steering")
+    if r.gear_apex_diff and r.time_lost > 0.05:
+        out.append("gear_apex")
     return out
 
 
@@ -296,6 +348,22 @@ def coaching_tips(r: CornerReport, units: str = "metric") -> list[str]:
                                   f"open the throttle sooner on exit."),
         "low_exit": lambda: (f"Exit speed {spd(r.exit_speed_diff_kmh)} lower - this costs time all the "
                              f"way down the next straight. Prioritise a good exit."),
+        "wide_apex": lambda: (f"Your line is {dist(r.line_apex_m)} wide of the reference at the apex - "
+                              f"get closer to the inside kerb."),
+        "tight_entry": lambda: (f"You start the corner {dist(r.line_entry_m)} inside the reference line - "
+                                f"use the full track width on entry for a wider, faster arc."),
+        "oversteer": lambda: (f"The rear stepped out: {dist(r.oversteer_m)} of opposite lock. Be smoother "
+                              f"with throttle/brake release here, or adjust the car."),
+        "understeer": lambda: ("Understeer: more steering lock than the reference for less rotation - "
+                               "slow the entry slightly or trail the brake to load the front."),
+        "wheelspin": lambda: (f"Wheelspin on exit for ~{dist(r.wheelspin_m_diff)} more than the reference - "
+                              f"squeeze the throttle progressively."),
+        "abs_heavy": lambda: (f"ABS working {dist(r.abs_m_diff)} more than the reference - brake pressure is "
+                              f"too high, the tyres are locking."),
+        "busy_steering": lambda: (f"{r.corrections_diff} more steering corrections than the reference - "
+                                  f"one smooth input, the car is unsettled."),
+        "gear_apex": lambda: (f"Gear {r.gear_apex} at the apex (reference uses {r.gear_apex_ref}) - "
+                              f"{'try one lower for drive' if (r.gear_apex_diff or 0) > 0 else 'try one higher, less wheelspin'}."),
     }
     codes = r.issues or detect_issues(r)
     tips = [text[c]() for c in codes]
@@ -327,11 +395,17 @@ def technique_scores(reports: list[CornerReport], gap: float, ref_lap_time: floa
                     for r in reports if r.throttle_point_m is not None])
     trail = avg([_clamp(100 - 1.5 * max(0.0, -r.trail_m_diff - 5))
                  for r in reports if r.trail_m_diff is not None])
+    line = avg([_clamp(100 - 10 * max(0.0, abs(r.line_apex_m) - 0.5))
+                for r in reports if r.line_apex_m is not None])
+    control = avg([_clamp(100 - 3 * max(0.0, r.oversteer_m or 0) - 2 * max(0.0, r.wheelspin_m_diff or 0)
+                          - 1 * max(0.0, r.abs_m_diff or 0) - 4 * max(0, r.corrections_diff or 0))
+                   for r in reports if r.oversteer_m is not None or r.wheelspin_m_diff is not None])
     pace = _clamp(100 - (gap / ref_lap_time) * 100 * 20) if ref_lap_time else None
-    parts = [x for x in (braking, turn_in, min_speed, throttle, trail) if x is not None]
+    parts = [x for x in (braking, turn_in, min_speed, throttle, trail, line, control) if x is not None]
     return {
         "braking": braking, "turn_in": turn_in, "min_speed": min_speed, "throttle": throttle,
-        "trail_braking": trail, "pace": None if pace is None else round(pace),
+        "trail_braking": trail, "line": line, "car_control": control,
+        "pace": None if pace is None else round(pace),
         "technique": round(sum(parts) / len(parts)) if parts else None,
     }
 
@@ -342,6 +416,8 @@ class Comparison:
     lap_time_ref: float
     delta: np.ndarray
     corners: list[CornerReport]
+    line: np.ndarray | None = None        # lateral offset from the reference line (m, + = left)
+    shifts: dict | None = None
 
     def to_dict(self) -> dict:
         top = sorted([c for c in self.corners if c.time_lost > 0.02],
@@ -356,6 +432,8 @@ class Comparison:
             "potential_gain": round(sum(c.time_lost for c in top), 3),
             "scores": technique_scores(self.corners, self.lap_time_me - self.lap_time_ref,
                                        self.lap_time_ref),
+            "line": None if self.line is None else np.round(self.line, 2).tolist(),
+            "shifts": self.shifts,
         }
 
 
@@ -364,7 +442,9 @@ def compare_laps(me: Lap, ref: Lap, corners: list[Corner] | None = None,
     corners = corners if corners is not None else detect_corners(ref)
     L = ref.track_length or me.track_length or 4000.0
     bin_m = L / N_BINS
-    reports = [compare_corner(me, ref, c, bin_m) for c in corners]
+    line = line_offset(me, ref)
+    ratios = (gear_ratios(me), gear_ratios(ref))
+    reports = [compare_corner(me, ref, c, bin_m, line, ratios) for c in corners]
     d = delta_trace(me, ref)
     if reports:
         # Time won/lost on the start/finish straight belongs to the last corner's exit.
@@ -377,4 +457,7 @@ def compare_laps(me: Lap, ref: Lap, corners: list[Corner] | None = None,
     if units != "metric":
         for r in reports:
             r.tips = coaching_tips(r, units)
-    return Comparison(me.lap_time, ref.lap_time, d, reports)
+    cmp = Comparison(me.lap_time, ref.lap_time, d, reports)
+    cmp.line = None if line is None else line["offset"]
+    cmp.shifts = shift_summary(me, ref)
+    return cmp

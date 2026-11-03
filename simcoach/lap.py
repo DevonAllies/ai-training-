@@ -19,7 +19,10 @@ import numpy as np
 N_BINS = 1000
 GRID = (np.arange(N_BINS) + 0.5) / N_BINS  # bin centres, fraction of lap
 
-CHANNELS = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon")
+CHANNELS = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon",
+            "yaw", "latacc", "rpm", "abs", "fuel")
+# Optional extra channels (car control & fuel). Present when the source has them.
+EXTRA = ("yaw", "latacc", "rpm", "abs", "fuel")
 
 # Column name aliases seen in Garage 61 / iRacing / MoTeC style CSV exports.
 _ALIASES = {
@@ -33,6 +36,11 @@ _ALIASES = {
     "steer": ["steeringwheelangle", "steering", "steer", "steeringangle"],
     "lat": ["lat", "latitude"],
     "lon": ["lon", "long", "longitude", "lng"],
+    "yaw": ["yawrate", "yaw_rate"],                       # rad/s (not "Yaw", which is heading)
+    "latacc": ["lataccel", "latacc", "lateralacceleration", "glat", "g_lat"],   # m/s^2
+    "rpm": ["rpm", "enginerpm"],
+    "abs": ["absactive", "absactivity"],
+    "fuel": ["fuellevel", "fuel"],                        # litres in tank
 }
 
 
@@ -46,6 +54,11 @@ class Lap:
     steer: np.ndarray | None = None
     lat: np.ndarray | None = None
     lon: np.ndarray | None = None
+    yaw: np.ndarray | None = None      # yaw rate, rad/s
+    latacc: np.ndarray | None = None   # lateral acceleration, m/s^2
+    rpm: np.ndarray | None = None
+    abs: np.ndarray | None = None      # 1 while ABS is working
+    fuel: np.ndarray | None = None     # litres in the tank
     track_length: float = 0.0    # metres
     label: str = ""
     meta: dict = field(default_factory=dict)
@@ -89,14 +102,19 @@ class Lap:
             "time": arr(self.time),
             "gear": arr(self.gear),
             "steer": arr(self.steer),
-            "lat": arr(self.lat) if self.has_map() else None,
-            "lon": arr(self.lon) if self.has_map() else None,
+            # GPS needs ~8 decimals (1e-8 deg ~ 1 mm) - 4 decimals would be 11 m steps
+            "lat": np.round(self.lat.astype(float), 8).tolist() if self.has_map() else None,
+            "lon": np.round(self.lon.astype(float), 8).tolist() if self.has_map() else None,
+            **{k: arr(getattr(self, k)) for k in EXTRA if getattr(self, k) is not None},
             "meta": self.meta,
         }
 
     def save(self, path: Path) -> None:
         """Save as CSV with a JSON metadata header line."""
-        cols = ["pct", "time", "speed", "throttle", "brake", "gear", "steer", "lat", "lon"]
+        extras = [k for k in EXTRA if getattr(self, k) is not None]
+        cols = ["pct", "time", "speed", "throttle", "brake", "gear", "steer", "lat", "lon"] + \
+            [{"yaw": "yawrate", "latacc": "lataccel", "rpm": "rpm", "abs": "absactive", "fuel": "fuellevel"}[k]
+             for k in extras]
         buf = io.StringIO()
         meta = dict(self.meta, label=self.label, track_length=self.track_length,
                     lap_time=self.lap_time)
@@ -108,9 +126,10 @@ class Lap:
                 self.gear if self.gear is not None else zeros,
                 self.steer if self.steer is not None else zeros,
                 self.lat if self.lat is not None else zeros,
-                self.lon if self.lon is not None else zeros]
+                self.lon if self.lon is not None else zeros] + [getattr(self, k) for k in extras]
         for row in zip(*data):
-            w.writerow([f"{v:.7g}" for v in row])
+            # lat/lon (columns 7, 8) need full precision for racing-line comparison
+            w.writerow([f"{v:.12g}" if i in (7, 8) else f"{v:.7g}" for i, v in enumerate(row)])
         path.write_text(buf.getvalue(), encoding="utf-8")
 
     @classmethod
@@ -303,6 +322,7 @@ def parse_csv(text: str, lap_time: float | None = None, track_length: float = 0.
         pct=pct, speed=speed, throttle=unit(data["throttle"]), brake=unit(data["brake"]),
         time=t, lap_time=lap_time, track_length=track_length, dist=data["dist"],
         gear=data["gear"], steer=data["steer"], lat=data["lat"], lon=data["lon"],
+        **{k: data[k] for k in EXTRA if data.get(k) is not None},
     )
 
 

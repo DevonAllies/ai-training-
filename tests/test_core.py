@@ -295,6 +295,13 @@ def test_no_memory_growth_over_long_session():
     eng.coach.voice.native = False
     eng.set_reference(demo.reference_lap())
     eng.coach.start_focus(None)
+    # shrink every per-lap history cap so the warm-up fills them; after that, growth must be ~0
+    import collections as _c
+    eng.laps_done = _c.deque(maxlen=5)
+    eng.history_laps = _c.deque(maxlen=5)
+    eng.coach.history = _c.deque(maxlen=5)
+    eng.race.max_laps = 5
+    eng.coach.voice.log = _c.deque(maxlen=5)
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
@@ -306,18 +313,27 @@ def test_no_memory_growth_over_long_session():
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
 
-    run(4)                                  # warm-up: caches, first laps, numpy pools
+    run(6)                                  # warm-up: fill the (shrunken) caps, numpy pools
     gc.collect()
     tracemalloc.start()
-    base = tracemalloc.take_snapshot()
-    run(10)
-    gc.collect()
-    after = tracemalloc.take_snapshot()
+    def to_lap_end():                       # measure at the same point of a lap each time
+        n = eng.lap_count
+        while eng.lap_count == n:
+            src._last -= 1 / 60
+            eng._process(src.read())
+
+    run(2)                                  # settle one-off allocations (first comparisons, history file)
+    samples = []
+    for _ in range(12):
+        to_lap_end()
+        gc.collect()
+        samples.append(tracemalloc.get_traced_memory()[0])
     tracemalloc.stop()
-    growth = sum(s.size_diff for s in after.compare_to(base, "filename"))
-    # 10 more laps of history (bounded deques) may add a little - but not per-sample growth
-    assert growth < 400_000, f"memory grew by {growth} bytes over 10 laps"
-    assert len(eng.events) <= 30 and len(eng.coach.history) <= 100
+    spread = max(samples) - min(samples)
+    # Bounded: memory may differ by one retained lap (~105 KB: "last lap" and "session best" are
+    # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
+    assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
+    assert len(eng.events) <= 30 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
 
 
 # ------------------------------------------------------------------ v4: auto-update
@@ -600,3 +616,168 @@ def test_exit_demo_and_quit_endpoints():
     assert remote.post("/api/quit").status_code == 403
     cmd = relaunch_command(8061)
     assert "--takeover" in cmd and "--demo" not in cmd and "8061" in cmd
+
+
+# ------------------------------------------- v7: optimal lap, line, car control, progress, race
+def test_car_control_and_line_detect_planted_mistakes():
+    cmp = compare_laps(demo.make_lap(demo.YOU_STYLE, "me"), demo.reference_lap())
+    by = {c.name: c for c in cmp.corners}
+    assert by["C1"].wheelspin_m_diff >= 20 and "wheelspin" in by["C1"].issues
+    assert by["C3"].abs_m_diff >= 10 and "abs_heavy" in by["C3"].issues
+    assert by["C7"].oversteer_m >= 15 and "oversteer" in by["C7"].issues
+    assert by["C5"].line_apex_m == pytest.approx(2.5, abs=0.5) and "wide_apex" in by["C5"].issues
+    assert abs(by["C2"].line_apex_m) < 0.2                      # on the reference line elsewhere
+    d = cmp.to_dict()
+    assert d["line"] and len(d["line"]) == N_BINS and d["scores"]["car_control"] < 100
+    same = compare_laps(demo.reference_lap(), demo.reference_lap())
+    assert all(not c.issues for c in same.corners) and same.to_dict()["scores"]["line"] == 100
+
+
+def test_optimal_lap_stitches_best_segments():
+    from simcoach.optimal import build_optimal
+    a = demo.make_lap(demo.YOU_STYLE, "A", jitter=1.0, seed=1)
+    b = demo.make_lap(demo.YOU_STYLE, "B", jitter=1.0, seed=2)
+    ref = demo.reference_lap()
+    lap, segs = build_optimal([a, b, ref])
+    assert lap.lap_time <= min(a.lap_time, b.lap_time, ref.lap_time) + 1e-6
+    assert abs(lap.lap_time - sum(s.duration for s in segs)) < 0.01
+    assert np.all(np.diff(lap.time) > 0)                       # monotonic time after stitching
+    lap2, _ = build_optimal([a, b])
+    assert lap2.lap_time <= min(a.lap_time, b.lap_time) and lap2.meta["source"] == "optimal"
+    with pytest.raises(ValueError):
+        build_optimal([a])
+
+
+def test_lift_and_coast_plan_and_race_planner():
+    from simcoach.race import RaceTracker, extra_lap_target, lift_plan, plan_race
+    lap = demo.reference_lap()
+    fpl = float(lap.fuel[0] - lap.fuel[-1])
+    small, big = lift_plan(lap, 0.05), lift_plan(lap, 0.2)
+    assert small["reached"] and big["reached"] and small["plan"] and big["plan"]
+    assert big["total_lost_s"] > small["total_lost_s"] > 0              # more saving costs more
+    assert big["cost_per_litre_s"] >= small["cost_per_litre_s"]          # and more per litre
+    assert all(p["lift_bin"] < p["brake_bin"] or p["lift_bin"] > 900 for p in big["plan"])
+    plan = plan_race(86.4, fpl, 60, race_time_s=3 * 3600, pit_loss_s=60,
+                     lift_cost_per_litre=small["cost_per_litre_s"])
+    assert sum(plan["stints"]) == plan["total_laps"] and plan["stops"] == len(plan["stints"]) - 1
+    assert plan["options"] and plan["options"][0]["save_per_lap"] > 0
+    t = extra_lap_target(20.0, fpl)
+    assert t["laps_goal"] == int(20 / fpl) + 1 and 20 / t["target_fuel_per_lap"] >= t["laps_goal"] - 1e-6
+    rt = RaceTracker()
+    for i in range(6):
+        rt.add(i + 1, 90 + 0.1 * i, 3.0, True, pit=(i == 3))
+    st = rt.status(30.0, 1800.0, -1.0, 60.0, 7)
+    assert st["stint"] == 2 and st["fuel_per_lap"] == 3.0 and st["laps_of_fuel"] == 10.0
+    assert st["laps_to_go"] == 20 and st["stops_needed"] == 1 and st["pit_window"]["close"] == 17
+
+
+def test_live_race_fuel_save_and_history(tmp_path):
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    from simcoach import history
+    cfg = Config(record_laps=True, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    _drive(eng, 3.6)
+    st = client.get("/api/race").json()
+    assert st["fuel_per_lap"] and 2.5 < st["fuel_per_lap"] < 3.5 and st["laps_of_fuel"]
+    r = client.post("/api/fuelsave", json={"mode": "target", "save_per_lap": 0.1}).json()
+    assert r["active"] and r["plan"]
+    lift_bins = {p["lift_bin"] for p in r["plan"]}
+    from simcoach.lap import GRID as G
+    cue = eng._brake_cue(float(G[min(lift_bins)]) - 0.01)
+    assert cue and cue["kind"] == "lift"
+    assert client.post("/api/fuelsave", json={"mode": "off"}).json()["active"] is False
+    plan = client.post("/api/race/plan", json={"race_minutes": 120, "pit_loss_s": 55}).json()
+    assert plan["total_laps"] > 0 and "options" in plan
+    # history + progress + practice plan
+    assert history.load_sessions("Demo Ring - GP")
+    prog = client.get("/api/progress", params={"track": "Demo Ring - GP"}).json()
+    assert prog["sessions"] and prog["sessions"][-1]["best"]
+    pp = client.get("/api/practice_plan").json()
+    assert pp["plan"] and any("Corner drill" in p["title"] for p in pp["plan"])
+    assert sum(p["minutes"] for p in pp["plan"]) == 45
+    # optimal lap from the recorded laps
+    o = client.post("/api/optimal", json={"set_reference": True}).json()
+    assert o.get("lap_time") and o["lap_time"] <= o["best_single_lap"] + 1e-6, o
+    assert eng.ref_label.startswith("Optimal lap")
+
+
+def test_practice_plan_fits_session_length():
+    from simcoach.history import practice_plan
+    rep = {"corners": [{"name": "C1", "title": "T1", "avg_loss": 0.4, "best_loss": 0.1, "spread": 0.2,
+                        "main_issue_code": "brake_early", "main_issue": "Braking too early"},
+                       {"name": "C2", "title": "T2", "avg_loss": 0.3, "best_loss": 0.1, "spread": 0.05,
+                        "main_issue_code": "wide_apex", "main_issue": "Missing the apex"}]}
+    for m in (30, 45, 60, 90):
+        plan = practice_plan(rep, {"braking": 70, "line": 85}, m)
+        assert sum(p["minutes"] for p in plan) == m and all(p["minutes"] >= 3 for p in plan)
+    assert any("Racing line" in p["title"] or "Braking" in p["title"] for p in practice_plan(rep, {"braking": 70}, 45))
+
+
+def test_gps_precision_survives_save_and_json(tmp_path):
+    ref = demo.reference_lap()
+    p = tmp_path / "gps.csv"
+    ref.save(p)
+    back = Lap.load(p)
+    # metres of error after a save/load round trip (1e-5 deg ~ 1.1 m would break line analysis)
+    err_m = float(np.max(np.abs(back.lat - ref.lat))) * 110540
+    assert err_m < 0.05
+    j = ref.to_json()
+    assert float(np.max(np.abs(np.array(j["lat"]) - ref.lat))) * 110540 < 0.01
+    cmp = compare_laps(Lap.load(p), ref)
+    assert max(abs(c.line_apex_m) for c in cmp.corners) < 0.2   # same lap -> on the line everywhere
+
+
+# ------------------------------------------------- v8: planner from Garage 61 / live / exports
+def test_g61_fuel_and_pace_stats():
+    from simcoach.race import pace_stats
+    assert describe_lap({"lapTime": 219.0, "fuelUsed": 7.02})["fuel_used"] == 7.02
+    assert describe_lap({"lapTime": 219.0, "fuel": {"used": 6.9}})["fuel_used"] == 6.9
+    assert describe_lap({"lapTime": 219.0})["fuel_used"] is None
+    st = pace_stats([{"lap_time": 218.6, "fuel_used": 7.0}, {"lap_time": 219.3, "fuel_used": 7.06},
+                     {"lap_time": 246.3, "fuel_used": 6.8},            # traffic/incident lap: excluded
+                     {"lap_time": 219.0, "fuel_used": None, "clean": True},
+                     {"lap_time": 210.0, "fuel_used": 9.0, "clean": False}])   # unclean: excluded
+    assert st["lap_time"] == 219.0 and st["best"] == 218.6 and st["laps"] == 3
+    assert st["fuel_per_lap"] == pytest.approx(7.03) and st["fuel_laps"] == 2
+
+
+def test_plan_from_now_uses_fuel_in_tank():
+    from simcoach.race import plan_race
+    full = plan_race(220, 7.0, 75, race_time_s=3 * 3600)
+    now = plan_race(220, 7.0, 75, race_time_s=3 * 3600, fuel_now=40)
+    assert sum(now["stints"]) == now["total_laps"] == full["total_laps"] == 50
+    assert now["stints"][0] == 5 and all(n <= 10 for n in now["stints"][1:])
+    assert now["stops"] == len(now["stints"]) - 1 and now["fuel_margin"] >= 0
+    opt = next(o for o in now["options"] if o["saves_stop"])
+    # with the saving, fuel now + one stop fewer of full tanks covers the race
+    assert 40 + (now["stops"] - 1) * 75 >= opt["target_fuel_per_lap"] * now["total_laps"] - 1e-6
+
+
+def test_race_sources_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    from simcoach import garage61, sessions
+    from simcoach.server import create_app
+    sessions.import_file(SAMPLE)                      # Le Mans export with fuel used per lap
+    calls = {}
+
+    def fake_find(self, **kw):
+        calls.update(kw)
+        return [{"lapTime": 219.0 + i * 0.1, "fuelUsed": 7.0 + i * 0.01, "driver": {"firstName": "Devon"}}
+                for i in range(8)]
+    monkeypatch.setattr(garage61.Garage61Client, "find_laps", fake_find)
+    cfg = Config(garage61_token="x")
+    eng = LiveEngine(cfg, DemoSource())
+    client = TestClient(create_app(eng, cfg))
+    r = client.get("/api/race/sources", params={"car": 1, "track": 2, "scope": "me"}).json()
+    g = r["garage61"]
+    assert g["laps"] == 8 and g["lap_time"] == pytest.approx(219.35) and g["fuel_per_lap"] == pytest.approx(7.035)
+    assert calls["drivers"] == ["me"] and calls["cars"] == [1] and calls["group"] == "none"
+    e = r["export"]
+    assert e and e["car"] == "Dallara P217" and 218 < e["lap_time"] < 221 and 6.5 < e["fuel_per_lap"] < 7.5
+    plan = client.post("/api/race/plan", json={"race_minutes": 360, "avg_lap": g["lap_time"],
+                                               "fuel_per_lap": g["fuel_per_lap"], "tank": 75,
+                                               "fuel_now": 30}).json()
+    assert plan["from_now"] and plan["stints"][0] == 4 and sum(plan["stints"]) == plan["total_laps"]

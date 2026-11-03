@@ -27,7 +27,9 @@ import numpy as np
 from . import demo
 from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corner, compare_laps,
                        detect_corners, steer_threshold, turn_in_bin)
+from . import history
 from .coach import SessionCoach
+from .race import RaceTracker, extra_lap_target, lift_plan
 from .config import Config, laps_dir
 from .corners import apply_names
 from .lap import GRID, N_BINS, Lap, fmt_time
@@ -102,6 +104,15 @@ class IRacingSource(TelemetrySource):
                 on_pit_road=bool(ir["OnPitRoad"]),
                 surface=int(ir["PlayerTrackSurface"]),   # 0 = off track, 3 = on track
                 last_lap_time=float(ir["LapLastLapTime"] or 0.0),
+                yaw=_f(ir["YawRate"]),
+                latacc=_f(ir["LatAccel"]),
+                rpm=_f(ir["RPM"]),
+                abs=_f(ir["BrakeABSactive"]),
+                fuel=_f(ir["FuelLevel"]),
+                fuel_per_hour=_f(ir["FuelUsePerHour"]),          # kg/h
+                time_remain=_f(ir["SessionTimeRemain"], -1.0),
+                laps_remain=_f(ir["SessionLapsRemainEx"], -1.0),
+                track_temp=_f(ir["TrackTempCrew"]),
             )
         finally:
             ir.unfreeze_var_buffer_latest()
@@ -131,6 +142,10 @@ class IRacingSource(TelemetrySource):
             "session_types": {int(s.get("SessionNum", i)): s.get("SessionType", "")
                               for i, s in enumerate(sessions)},
             "sectors": sorted(float(s.get("SectorStartPct", 0)) for s in splits),
+            "fuel_max_l": _f(drv.get("DriverCarFuelMaxLtr")) * (_f(drv.get("DriverCarMaxFuelPct"), 1.0) or 1.0),
+            "session_lengths": {int(s.get("SessionNum", i)): {"laps": s.get("SessionLaps"),
+                                                              "time": s.get("SessionTime")}
+                                for i, s in enumerate(sessions)},
         }
         return self._session_cache
 
@@ -156,6 +171,9 @@ class DemoSource(TelemetrySource):
         lap = demo.make_lap(demo.YOU_STYLE, "you", jitter=1.2, seed=self._lapno)
         self._v, self._thr, self._brk, self._gear = lap.speed, lap.throttle, lap.brake, lap.gear
         self._lat, self._lon, self._steer = lap.lat, lap.lon, lap.steer
+        self._yaw, self._latacc, self._rpm, self._abs = lap.yaw, lap.latacc, lap.rpm, lap.abs
+        if not hasattr(self, "fuel_level"):
+            self.fuel_level = demo.FUEL_TANK_L
 
     def connect(self) -> bool:
         return True
@@ -174,18 +192,33 @@ class DemoSource(TelemetrySource):
 
         def at(a):
             return float(np.interp(self.pct, GRID, a, period=1.0))
+        thr = at(self._thr)
+        self.fuel_level -= (0.002 + 0.045 * thr) * dt
+        if self.fuel_level < 3.0:                     # demo: "refuel" silently
+            self.fuel_level = demo.FUEL_TANK_L
         return {
             "on_track": True, "session_num": 0, "session_time": self.session_time, "pct": self.pct,
             "lap": self.lap, "speed": at(self._v), "throttle": at(self._thr), "brake": at(self._brk),
             "gear": round(at(self._gear)), "steer": at(self._steer), "lat": at(self._lat),
             "lon": at(self._lon), "on_pit_road": False, "surface": 3, "last_lap_time": 0.0,
+            "yaw": at(self._yaw), "latacc": at(self._latacc), "rpm": at(self._rpm), "abs": at(self._abs),
+            "fuel": self.fuel_level, "fuel_per_hour": (0.002 + 0.045 * thr) * 3600 * 0.75,
+            "time_remain": max(0.0, 6 * 3600 - self.session_time), "laps_remain": -1.0, "track_temp": 30.0,
         }
 
     def session(self) -> dict:
         return {"track": "Demo Ring", "track_config": "GP", "track_id": None,
                 "track_length": demo.TRACK_LENGTH, "car": "Demo GT3", "car_id": None,
                 "driver": "You", "session_types": {0: "Practice"},
-                "sectors": [0.0, 0.25, 0.5, 0.75]}
+                "sectors": [0.0, 0.25, 0.5, 0.75], "fuel_max_l": demo.FUEL_TANK_L,
+                "session_lengths": {0: {"laps": "unlimited", "time": "21600.0000 sec"}}}
+
+
+def _f(v, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 def parse_track_length(s: str) -> float:
@@ -200,7 +233,8 @@ def parse_track_length(s: str) -> float:
 class LapBuffer:
     """Fills the distance grid as samples arrive."""
 
-    CH = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon", "time")
+    CH = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon", "time",
+          "yaw", "latacc", "rpm", "abs", "fuel")
 
     def __init__(self, start_session_time: float | None):
         self.start = start_session_time
@@ -209,10 +243,16 @@ class LapBuffer:
         self.prev: dict | None = None
         self.valid = start_session_time is not None
         self.max_bin = -1
+        self.pit = False                 # lap touched the pit lane
+        self.fuel_start: float | None = None
 
     def add(self, s: dict) -> None:
         if s["on_pit_road"] or s["surface"] == 0:
             self.valid = False
+        if s.get("on_pit_road"):
+            self.pit = True
+        if self.start is not None and self.fuel_start is None and s.get("fuel"):
+            self.fuel_start = float(s["fuel"])
         if self.start is None:
             self.prev = s
             return
@@ -229,7 +269,8 @@ class LapBuffer:
         for i in range(max(i0, 0), min(i1, N_BINS - 1) + 1):
             f = (GRID[i] - a) / (b - a)
             for k in self.CH:
-                self.data[k][i] = p0[k] + (s[k] - p0[k]) * f
+                a0, a1 = p0.get(k, 0.0), s.get(k, 0.0)
+                self.data[k][i] = a0 + (a1 - a0) * f
             self.filled[i] = True
             self.max_bin = max(self.max_bin, i)
 
@@ -241,9 +282,14 @@ class LapBuffer:
         arr = {}
         for k in self.CH:
             arr[k] = np.interp(np.arange(N_BINS), idx, self.data[k][idx]) if len(idx) else self.data[k]
+        def opt(k):                                   # extra channels: None if the source never sent them
+            a = arr[k]
+            return a if np.any(a != 0) else None
         return Lap(speed=np.clip(arr["speed"], 0.5, None), throttle=arr["throttle"],
                    brake=arr["brake"], time=np.maximum.accumulate(arr["time"]), gear=arr["gear"],
-                   steer=arr["steer"], lat=arr["lat"], lon=arr["lon"], track_length=track_length)
+                   steer=arr["steer"], lat=arr["lat"], lon=arr["lon"], yaw=opt("yaw"),
+                   latacc=opt("latacc"), rpm=opt("rpm"), abs=opt("abs"), fuel=opt("fuel"),
+                   track_length=track_length)
 
 
 # ------------------------------------------------------- per-corner phases
@@ -340,6 +386,10 @@ class LiveEngine:
         self.session_best: Lap | None = None
         self.laps_done: collections.deque[dict] = collections.deque(maxlen=200)
         self.lap_count = 0
+        self.race = RaceTracker()
+        self.fuel_save: dict | None = None        # active lift-and-coast plan
+        self.history_id: str | None = None
+        self.history_laps: collections.deque[dict] = collections.deque(maxlen=history.MAX_LAPS)
         self.coach = SessionCoach(VoiceCoach(native=config.voice_native))
         self.coach.focus.target = config.focus_target
         self.status_msg = "Waiting for iRacing…"
@@ -454,6 +504,10 @@ class LiveEngine:
                 self.session = sess
                 if changed:
                     self.best_live_sectors = None
+                    self.race.reset()
+                    self.fuel_save = None
+                    self.history_id = None
+                    self.history_laps.clear()
                     if self.ref_corners:
                         apply_names(self.ref_corners, self.track_name())
                     if self.on_session_change:
@@ -499,7 +553,13 @@ class LiveEngine:
             if old is not None and old.start is not None:
                 old.add(dict(s, pct=1.0, session_time=t_cross))
                 self._finish_sector(t_cross - old.start, old.valid)
-                self._finish_lap(old, t_cross - old.start)
+                fuel_used = None
+                if old.fuel_start is not None and s.get("fuel"):
+                    used = old.fuel_start - float(s["fuel"])
+                    fuel_used = round(used, 3) if 0 < used < 50 else None   # refuel / reset -> unknown
+                self.race.add(int(s.get("lap") or self.lap_count + 1), t_cross - old.start, fuel_used,
+                              old.valid, old.pit)
+                self._finish_lap(old, t_cross - old.start, fuel_used)
             self.buf = LapBuffer(t_cross)
             self.buf.add(dict(s, pct=0.0, session_time=t_cross))
             self.buf.add(s)
@@ -616,7 +676,13 @@ class LiveEngine:
             if dist < -L / 2:
                 dist += L
             if 120 <= dist <= 350:
-                self.coach.pre_corner(idx, rc.corner.name, rc.corner.spoken)
+                plan = (self.fuel_save or {}).get("plan") or []
+                lift = next((p for p in plan if p["index"] == idx), None)
+                if lift and idx not in self.coach._cued:      # fuel-save mode: lift cue replaces the tip
+                    self.coach._cued.add(idx)
+                    self.coach._say(f"{rc.corner.spoken}, lift {lift['lift_m']} metres early")
+                else:
+                    self.coach.pre_corner(idx, rc.corner.name, rc.corner.spoken)
 
     def _check_corner(self, pct: float) -> None:
         ref = self.reference
@@ -640,7 +706,7 @@ class LiveEngine:
         return (self.session.get("track_length") or
                 (self.reference.track_length if self.reference is not None else 0.0) or 4000.0)
 
-    def _finish_lap(self, buf: LapBuffer, lap_time: float) -> None:
+    def _finish_lap(self, buf: LapBuffer, lap_time: float, fuel_used: float | None = None) -> None:
         if buf.coverage() < 0.97 or lap_time <= 0:
             return
         lap = buf.to_lap(self.track_length())
@@ -657,10 +723,11 @@ class LiveEngine:
             "valid": buf.valid,
             "session_type": self.session_type,
             "source": "live",
+            "fuel_used": fuel_used,
         }
         self.last_lap = lap
         info = {"lap_time": round(lap_time, 3), "valid": buf.valid, "label": lap.label, "file": None,
-                "sectors": [x["time"] for x in self.cur_sectors]}
+                "sectors": [x["time"] for x in self.cur_sectors], "fuel_used": fuel_used}
 
         if self.reference is not None:
             cmp = compare_laps(lap, self.reference, self.ref_corners, self.config.units)
@@ -680,6 +747,57 @@ class LiveEngine:
             if self.config.record_laps:
                 info["file"] = self._save(lap, when)
         self.laps_done.append(info)
+        self._record_history(info, lap)
+
+    def _record_history(self, info: dict, lap: Lap) -> None:
+        if not self.config.record_history:
+            return
+        try:
+            if self.history_id is None:
+                self.history_id = history.new_session_id(lap.meta.get("track", ""), lap.meta.get("car", ""))
+            self.history_laps.append({k: info.get(k) for k in ("lap", "lap_time", "valid", "gap", "scores",
+                                                               "fuel_used")})
+            history.save_session(self.history_id, lap.meta.get("track", ""), lap.meta.get("car", ""),
+                                 list(self.history_laps), self.coach.report())
+        except OSError:
+            log.warning("could not write session history")
+
+    # ------------------------------------------------------------- fuel save
+    def enable_fuel_save(self, save_per_lap: float | None = None, extra_lap: bool = False) -> dict:
+        """Activate lift-and-coast cues. Plan from your last clean lap (your own brake points)."""
+        with self.lock:
+            base = self.last_lap if (self.last_lap is not None and self.last_lap.meta.get("valid")) else \
+                (self.session_best or self.reference)
+            if base is None:
+                return {"available": False, "reason": "Drive a clean lap first."}
+            fpl = self.race.fuel_per_lap() or (base.meta.get("fuel_used") if base.meta else None)
+            target = save_per_lap
+            info = None
+            if extra_lap and fpl and self.last_sample and self.last_sample.get("fuel"):
+                info = extra_lap_target(float(self.last_sample["fuel"]), fpl)
+                target = info["save_per_lap"]
+            plan = lift_plan(base, target_save_per_lap=target, fuel_per_lap=fpl,
+                             corners=self.ref_corners if base is self.reference else None)
+            if not plan.get("available"):
+                return plan
+            plan["extra_lap"] = info
+            plan["fuel_per_lap"] = fpl
+            self.fuel_save = plan
+            return plan
+
+    def disable_fuel_save(self) -> None:
+        with self.lock:
+            self.fuel_save = None
+
+    def race_status(self) -> dict:
+        with self.lock:
+            s = self.last_sample or {}
+            st = self.race.status(s.get("fuel") or None, s.get("time_remain", -1.0), s.get("laps_remain", -1.0),
+                                  self.session.get("fuel_max_l") or None, int(s.get("lap") or self.lap_count))
+            st["fuel_save"] = self.fuel_save
+            st["session_type"] = self.session_type
+            st["session_length"] = (self.session.get("session_lengths") or {}).get(self.session_num)
+            return st
 
     def _save(self, lap: Lap, when: datetime) -> str:
         safe = re.sub(r"[^A-Za-z0-9]+", "_", f"{lap.meta['track']}_{lap.meta['car']}").strip("_")
@@ -690,8 +808,19 @@ class LiveEngine:
 
     # ------------------------------------------------------------ snapshot
     def _brake_cue(self, pct: float) -> dict | None:
-        """Distance to the next reference braking point (only when it's close)."""
+        """Distance to the next reference braking point (only when it's close).
+        In fuel-save mode the cue points at the lift-and-coast point instead."""
         L = self.track_length()
+        if self.fuel_save:
+            for p in self.fuel_save.get("plan", []):
+                dist = (GRID[p["lift_bin"]] - pct) * L
+                if dist < -L / 2:
+                    dist += L
+                to_brake = (GRID[p["brake_bin"]] - pct) * L
+                if to_brake < -L / 2:
+                    to_brake += L
+                if -40 <= dist <= 250 or (dist < 0 < to_brake):
+                    return {"corner": p["corner"], "m": round(dist), "kind": "lift", "lift_m": p["lift_m"]}
         for rc in self.ref_marks:
             if rc.brake is None:
                 continue
@@ -781,9 +910,20 @@ class LiveEngine:
             "sector_count": len(self.sector_starts()),
             "units": self.config.units,
             "focus": focus,
+            "fuel": self._fuel_overlay(),
             "voice": self.coach.voice.recent(5),
             "voice_mode": self.config.voice_mode,
         }
+
+    def _fuel_overlay(self) -> dict | None:
+        s = self.last_sample or {}
+        fpl = self.race.fuel_per_lap()
+        if not s.get("fuel"):
+            return None
+        return {"level": round(float(s["fuel"]), 1), "per_lap": fpl,
+                "laps": round(float(s["fuel"]) / fpl, 1) if fpl else None,
+                "save_mode": bool(self.fuel_save),
+                "target": (self.fuel_save or {}).get("target_l")}
 
     def trace(self) -> dict:
         """Current-lap arrays for the live chart (sent a few times per second)."""

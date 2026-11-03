@@ -148,6 +148,9 @@ def _extract(rec, v, si) -> tuple[dict, list[IBTLap]]:
     lat, lon = _col(rec, v, "Lat"), _col(rec, v, "Lon")
     pit = _col(rec, v, "OnPitRoad")
     surf = _col(rec, v, "PlayerTrackSurface", 3)
+    extras = {k: _col(rec, v, name) for k, name in (("yaw", "YawRate"), ("latacc", "LatAccel"), ("rpm", "RPM"),
+                                                    ("abs", "BrakeABSactive"), ("fuel", "FuelLevel"))
+              if name in v}
     on_track = _col(rec, v, "IsOnTrack", 1)
 
     # line crossings: LapDistPct wraps from ~1 to ~0 while driving
@@ -177,13 +180,16 @@ def _extract(rec, v, si) -> tuple[dict, list[IBTLap]]:
             return np.concatenate([[x[0]], x, [x[-1]]])
         lap = from_samples(pp, ext(speed), np.clip(ext(thr), 0, 1), np.clip(ext(brk), 0, 1), time=ss,
                            lap_time=lap_time, track_length=info["track_length"], gear=ext(gear),
-                           steer=ext(steer), lat=ext(lat), lon=ext(lon))
+                           steer=ext(steer), lat=ext(lat), lon=ext(lon),
+                           **{k: ext(a_) for k, a_ in extras.items()})
         lap.time = lap.time * (lap_time / lap.lap_time) if lap.lap_time > 0 else lap.time
         number = int(np.bincount(lapno[seg] - lapno[seg].min()).argmax() + lapno[seg].min())
         lap.label = f"{info['driver'] or 'Teammate'} {fmt_time(lap_time)}"
         lap.meta = {"track": " - ".join(x for x in (info["track"], info["track_config"]) if x),
                     "car": info["car"], "driver": info["driver"], "source": "ibt", "lap": number,
                     "valid": valid}
+        if "fuel" in extras:
+            lap.meta["fuel_used"] = round(float(extras["fuel"][a] - extras["fuel"][b - 1]), 3)
         laps.append(IBTLap(number, lap_time, valid, lap))
     laps.sort(key=lambda x: (not x.valid, x.lap_time))
     return info, laps
