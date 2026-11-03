@@ -136,3 +136,94 @@ def test_api_endpoints():
     assert client.get("/api/local/laps/../../etc").status_code in (404, 405)
     with client.websocket_connect("/ws/live") as ws:
         assert ws.receive_json()["type"] == "snap"
+
+
+# ---------------------------------------------------------------- v2 features
+from pathlib import Path  # noqa: E402
+
+SAMPLE = Path(__file__).resolve().parent.parent / "sample_data" / "Garage61_IMSA_LeMans_DallaraP217_export.xlsx"
+
+
+def test_parse_garage61_session_export():
+    from simcoach.sessions import analyse_export, parse_g61_export
+    d = parse_g61_export(SAMPLE)
+    assert d["car"] == "Dallara P217"
+    assert "Mans" in d["track"]
+    names = [s["name"] for s in d["sessions"]]
+    assert names == ["Qualify", "Race"]
+    race = d["sessions"][1]
+    assert race["sector_count"] == 7 and len(race["laps"]) == 15
+    a = analyse_export(d)
+    r = a["sessions"][1]
+    assert r["best_lap"]["lap_time"] == pytest.approx(218.637)
+    assert r["theoretical_best"] < r["best_lap"]["lap_time"]
+    assert len(a["best_sectors"]) == 7
+    assert r["focus_sectors"]          # some sector flagged
+    assert r["tips"]
+
+
+def test_turn_in_detected():
+    cmp = compare_laps(demo.make_lap(demo.YOU_STYLE, "me"), demo.reference_lap())
+    c2 = {c.name: c for c in cmp.corners}["C2"]
+    assert c2.turn_in_m == pytest.approx(demo.YOU_STYLE.turn_in_late_m[1], abs=6)
+    assert any("Turning in" in t for t in c2.tips)
+
+
+def _drive(eng, laps=2.3):
+    src = eng.source
+    eng.session = src.session()
+    for _ in range(int(60 * demo.reference_lap().lap_time * laps)):
+        src._last -= 1 / 60
+        eng._process(src.read())
+
+
+def test_live_phase_events_sectors_and_overlay():
+    from simcoach.live import classify
+    cfg = Config(record_laps=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    _drive(eng, 2.6)
+    kinds = {e["kind"] for e in eng.events}
+    assert {"brake", "turn_in", "min_speed", "throttle"} <= kinds
+    # C3 has a planted 20 m early brake
+    early = [e for e in eng.events if e["corner"] == "C3" and e["kind"] == "brake"]
+    assert early and early[-1]["value"] < -8 and early[-1]["severity"] == "bad"
+    late_ti = [e for e in eng.events if e["corner"] == "C2" and e["kind"] == "turn_in"]
+    assert late_ti and late_ti[-1]["value"] > 8
+    # sectors: 4 demo sectors, session-best targets after the first full lap
+    assert eng.laps_done[0]["sectors"] and len(eng.laps_done[0]["sectors"]) == 4
+    assert abs(sum(eng.laps_done[0]["sectors"]) - eng.laps_done[0]["lap_time"]) < 0.05
+    assert eng.cur_sectors and eng.cur_sectors[0]["delta"] is not None
+    ov = eng.overlay()
+    assert ov["visible"] is True and ov["session_type"] == "Practice"
+    cfg.overlay_mode = "off"
+    assert eng.overlay()["visible"] is False
+    eng.session["session_types"] = {0: "Race"}
+    cfg.overlay_mode = "practice"
+    assert eng.overlay()["visible"] is False
+    assert classify("min_speed", -6)[1] == "bad"
+    assert classify("brake", -15)[0].startswith("Brake 15 m too early")
+
+
+def test_sector_targets_from_import():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config()
+    eng = LiveEngine(cfg, DemoSource())
+    client = TestClient(create_app(eng, cfg))
+    r = client.post("/api/sessions/import", params={"filename": SAMPLE.name}, content=SAMPLE.read_bytes())
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+    assert any(x["id"] == sid for x in client.get("/api/sessions").json())
+    a = client.get(f"/api/sessions/{sid}").json()
+    assert a["sessions"][1]["lap_list"]
+    # auto-match: pretend iRacing is at Le Mans in the P217 with 7 sectors
+    eng.session = {"track": "Circuit des 24 Heures du Mans", "track_config": "24 Heures du Mans",
+                   "car": "Dallara P217", "sectors": [i / 7 for i in range(7)], "session_types": {}}
+    from simcoach.server import auto_sector_targets
+    auto_sector_targets(eng)
+    assert eng.sector_targets and len(eng.sector_targets) == 7
+    assert client.post("/api/live/sector_targets", json={"session_id": sid}).status_code == 200
+    assert client.get("/overlay").status_code == 200
+    assert "visible" in client.get("/api/overlay").json()
+    assert client.post("/api/sessions/import", content=b"not a workbook").status_code == 422

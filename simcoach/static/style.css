@@ -86,3 +86,17 @@ canvas { width: 100%; display: block; }
   .delta { font-size: 54px; }
   .tbl { display: block; overflow-x: auto; }
 }
+
+.sector-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { flex: 1; min-width: 70px; text-align: center; padding: 6px 4px; border-radius: 6px; background: #1b2027; font: 600 13px Consolas, monospace; }
+.chip small { display: block; color: var(--muted); font: 11px "Segoe UI", sans-serif; }
+.chip.good { background: rgba(51,194,127,.18); color: var(--good); }
+.chip.bad { background: rgba(255,90,95,.18); color: var(--bad); }
+.sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.sev.good { background: var(--good); } .sev.bad { background: var(--bad); } .sev.warn { background: var(--warn); } .sev.ok { background: var(--text); }
+.tbl td.best { color: #c77dff; font-weight: 700; }
+.tbl tr.unused td { color: var(--muted); }
+.tips-list { margin: 6px 0 0; padding-left: 18px; }
+.tips-list li { margin: 4px 0; }
+input[type=range] { width: 100%; }
+a { color: var(--accent); }

@@ -13,6 +13,7 @@
     <button class="tab active" data-tab="live">Live</button>
     <button class="tab" data-tab="laps">Garage 61 laps</button>
     <button class="tab" data-tab="analyze">Analyse</button>
+    <button class="tab" data-tab="sessions">Sessions</button>
     <button class="tab" data-tab="settings">Settings</button>
   </nav>
   <div id="conn" class="pill">…</div>
@@ -59,12 +60,23 @@
       <canvas id="live-chart" height="260"></canvas>
     </div>
 
-    <div class="card">
-      <div class="label">Corner feedback (this lap)</div>
-      <ul id="callouts" class="callouts"><li class="muted">Complete a corner to get feedback.</li></ul>
+    <div class="card wide">
+      <div class="label">Sectors this lap <span id="sector-target" class="muted"></span>
+        <a href="/overlay" target="_blank" class="muted small-text" style="float:right">open browser overlay ↗</a></div>
+      <div id="live-sectors" class="sector-chips"><span class="muted">Sector times appear after the first sector.</span></div>
     </div>
 
     <div class="card">
+      <div class="label">Live corner feedback (brake · turn-in · min speed · throttle)</div>
+      <ul id="events" class="callouts"><li class="muted">Drive through a corner to see feedback.</li></ul>
+    </div>
+
+    <div class="card">
+      <div class="label">Corner summary (this lap)</div>
+      <ul id="callouts" class="callouts"><li class="muted">Complete a corner to get feedback.</li></ul>
+    </div>
+
+    <div class="card wide">
       <div class="label">Laps this session</div>
       <table class="tbl" id="session-laps"><thead><tr><th>Lap</th><th>Time</th><th>Gap</th><th></th></tr></thead><tbody></tbody></table>
       <button id="btn-analyze-last" class="small">Analyse last lap</button>
@@ -149,14 +161,30 @@
       <div class="card wide">
         <div class="label">Corner by corner</div>
         <table class="tbl" id="corner-table">
-          <thead><tr><th>Corner</th><th>Time lost</th><th>Brake point</th><th>Apex speed</th><th>Exit speed</th><th>Full throttle</th><th>Coaching</th></tr></thead>
+          <thead><tr><th>Corner</th><th>Time lost</th><th>Brake point</th><th>Turn-in</th><th>Apex speed</th><th>Exit speed</th><th>Full throttle</th><th>Coaching</th></tr></thead>
           <tbody></tbody>
         </table>
         <p class="muted small-text">Corners are numbered C1, C2… in order of speed minima on the reference lap
-          and may not match official turn numbers. Brake point: + means you braked later.</p>
+          and may not match official turn numbers. Brake point / turn-in / full throttle: + means later than the reference.</p>
       </div>
     </div>
   </div>
+</section>
+
+<!-- ============================ SESSIONS ============================ -->
+<section id="tab-sessions" class="tab-page">
+  <div class="card">
+    <div class="filters">
+      <label>Imported Garage 61 sessions <select id="ss-list"></select></label>
+      <label>Import export (.xlsx) <input id="ss-file" type="file" accept=".xlsx"></label>
+      <button id="ss-targets" class="primary">Use best sectors as live targets</button>
+      <button id="ss-delete">Delete</button>
+    </div>
+    <p class="muted small-text">In Garage 61 open an event or session and choose Export → Excel. The export holds lap and sector
+      times; SimCoach uses your best sectors as live sector targets in the overlay when you drive the same car and track.</p>
+    <div id="ss-msg" class="msg"></div>
+  </div>
+  <div id="ss-view"></div>
 </section>
 
 <!-- ============================ SETTINGS ============================ -->
@@ -174,6 +202,14 @@
     <label class="block">Units
       <select id="s-units"><option value="metric">Metric (km/h, m)</option><option value="imperial">Imperial (mph, ft)</option></select></label>
     <label class="check"><input id="s-record" type="checkbox"> Save every clean lap I drive</label>
+    <h3>In-game overlay</h3>
+    <p class="muted">A small always-on-top window over iRacing (run iRacing in borderless windowed mode).
+      Drag to move, mouse wheel to resize, right-click for options. A browser version for OBS or a tablet is at
+      <a href="/overlay" target="_blank">/overlay</a>.</p>
+    <label class="block">Show overlay
+      <select id="s-overlay"><option value="practice">Only in practice / testing sessions</option>
+        <option value="always">Always when on track</option><option value="off">Off</option></select></label>
+    <label class="block">Opacity <input id="s-opacity" type="range" min="0.3" max="1" step="0.05"></label>
     <div class="actions"><button id="btn-save" class="primary">Save</button> <button id="btn-test">Test connection</button></div>
     <div id="s-msg" class="msg"></div>
   </div>

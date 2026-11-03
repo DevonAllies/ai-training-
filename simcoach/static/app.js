@@ -36,6 +36,7 @@ function showTab(name) {
   if (name === "laps") { loadLocalLaps(); ensureCarTrackLists(); }
   if (name === "analyze") fillAnalyzeSelects();
   if (name === "settings") loadSettings();
+  if (name === "sessions") loadSessions();
 }
 
 // ------------------------------------------------------------ live
@@ -98,6 +99,9 @@ function onSnap(s) {
   $("#brk-ref").style.display = s.ref_brake === undefined ? "none" : "";
 
   renderCallouts(s.callouts || []);
+  renderEvents(s.events || []);
+  renderSectors(s.sectors || [], s.session && s.session.sectors ? s.session.sectors.length : 0, s.sector_targets);
+  $("#sector-target").textContent = s.sector_target_label ? `· target: ${s.sector_target_label}` : "";
   renderSessionLaps(s.laps || []);
   if (s.trace) state.trace = s.trace;
   if ($("#tab-live").classList.contains("active")) drawLiveChart(s.pct);
@@ -114,6 +118,34 @@ function renderCallouts(list) {
     const tips = c.tips.length ? c.tips.map(esc).join("<br>") : "On pace.";
     return `<li><span class="t ${cls}">${esc(c.name)} ${fmtDelta(c.time_lost)}s</span><br>${tips}</li>`;
   }).join("");
+}
+
+function renderEvents(list) {
+  const ul = $("#events");
+  const key = list.map((e) => e.corner + e.kind + e.t).join();
+  if (ul.dataset.k === key) return;
+  ul.dataset.k = key;
+  if (!list.length) { ul.innerHTML = '<li class="muted">Drive through a corner to see feedback.</li>'; return; }
+  ul.innerHTML = list.slice().reverse().map((e) =>
+    `<li><span class="sev ${e.severity}"></span><span class="t">${esc(e.corner)}</span> ${esc(e.text)}</li>`).join("");
+}
+
+function renderSectors(done, n, targets) {
+  const el = $("#live-sectors");
+  const key = n + ":" + done.map((x) => x.time).join();
+  if (el.dataset.k === key) return;
+  el.dataset.k = key;
+  if (!n) { el.innerHTML = '<span class="muted">This track has no sector information.</span>'; return; }
+  let html = "";
+  for (let i = 1; i <= n; i++) {
+    const x = done.find((d) => d.sector === i);
+    const tgt = targets && targets[i - 1] ? targets[i - 1].toFixed(3) : "";
+    if (x) {
+      const cls = x.delta == null ? "" : x.delta <= 0 ? "good" : "bad";
+      html += `<div class="chip ${cls}"><small>S${i}</small>${x.time.toFixed(3)}<small>${x.delta == null ? "" : fmtDelta(x.delta)}</small></div>`;
+    } else html += `<div class="chip"><small>S${i}</small>–<small>${tgt}</small></div>`;
+  }
+  el.innerHTML = html;
 }
 
 function renderSessionLaps(laps) {
@@ -324,12 +356,84 @@ function renderComparison(r) {
       <td class="${k.time_lost > 0.02 ? "pos" : k.time_lost < -0.02 ? "neg" : ""}">${fmtDelta(k.time_lost)}s
         <div class="muted small-text">entry ${fmtDelta(k.entry_lost)} / exit ${fmtDelta(k.exit_lost)}</div></td>
       <td>${k.brake_point_m === null ? "–" : signed(state.units === "metric" ? k.brake_point_m : k.brake_point_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
+      <td>${k.turn_in_m === null || k.turn_in_m === undefined ? "–" : signed(state.units === "metric" ? k.turn_in_m : k.turn_in_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
       <td>${signed(state.units === "metric" ? k.min_speed_diff_kmh : k.min_speed_diff_kmh / 1.609, 1, " " + spdUnit())}</td>
       <td>${signed(state.units === "metric" ? k.exit_speed_diff_kmh : k.exit_speed_diff_kmh / 1.609, 1, " " + spdUnit())}</td>
       <td>${k.throttle_point_m === null ? "–" : signed(state.units === "metric" ? k.throttle_point_m : k.throttle_point_m * 3.281, 0, state.units === "metric" ? " m" : " ft")}</td>
       <td class="tips">${k.tips.map((t) => `<div>${esc(t)}</div>`).join("") || '<span class="muted">On pace</span>'}</td></tr>`).join("");
 }
 window.addEventListener("resize", () => { if (state.redrawAnalysis) state.redrawAnalysis(); });
+
+// ------------------------------------------------------------ sessions (G61 exports)
+async function loadSessions(selectId) {
+  const list = await api("/api/sessions").catch(() => []);
+  const sel = $("#ss-list");
+  sel.innerHTML = list.length ? list.map((x) =>
+    `<option value="${esc(x.id)}">${esc((x.date || "").slice(0, 10))} · ${esc(x.track)} · ${esc(x.car)}</option>`).join("")
+    : '<option value="">No sessions imported yet</option>';
+  if (selectId) sel.value = selectId;
+  if (sel.value) showSession(sel.value); else $("#ss-view").innerHTML = "";
+}
+$("#ss-list").addEventListener("change", (e) => showSession(e.target.value));
+
+async function showSession(id) {
+  try {
+    const a = await api("/api/sessions/" + encodeURIComponent(id));
+    let html = `<div class="summary">
+      <div class="card stat"><div class="label">Car</div><div class="big" style="font-size:16px">${esc(a.car)}</div></div>
+      <div class="card stat"><div class="label">Track</div><div class="big" style="font-size:16px">${esc(a.track)}</div></div>
+      <div class="card stat"><div class="label">Theoretical best (all sessions)</div><div class="big">${fmtTime(a.theoretical_best)}</div></div>
+      <div class="card stat"><div class="label">Driver</div><div class="big" style="font-size:16px">${esc(a.driver)}</div></div></div>`;
+    a.sessions.forEach((s) => {
+      html += `<div class="card"><div class="label">${esc(s.name)} · ${s.laps} laps · ${s.clean_laps} clean · ${s.used_laps || 0} used for analysis</div>`;
+      if (s.note) { html += `<p class="muted">${esc(s.note)}</p>`; }
+      else {
+        html += `<div class="summary">
+          <div class="card stat"><div class="label">Best lap</div><div class="big">${fmtTime(s.best_lap.lap_time)}</div><div class="muted">lap ${s.best_lap.lap}</div></div>
+          <div class="card stat"><div class="label">Theoretical best</div><div class="big">${fmtTime(s.theoretical_best)}</div><div class="muted">${fmtDelta(s.theoretical_best - s.best_lap.lap_time)}s</div></div>
+          <div class="card stat"><div class="label">Average lap</div><div class="big">${fmtTime(s.average_lap)}</div><div class="muted">±${s.stdev.toFixed(2)}s</div></div>
+          <div class="card stat"><div class="label">Focus on</div><div class="big">${s.focus_sectors.length ? s.focus_sectors.map((x) => "S" + x).join(", ") : "–"}</div></div></div>`;
+        if (s.tips.length) html += `<ul class="tips-list">${s.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`;
+        html += `<div class="label" style="margin-top:12px">Sectors – time left vs your best</div><table class="tbl"><thead><tr><th>Sector</th><th>Best</th><th>Average</th><th>Avg loss</th><th>Best lap loss</th><th>Spread</th></tr></thead><tbody>` +
+          s.sectors.map((x) => `<tr><td>S${x.sector}</td><td>${x.best.toFixed(3)} <span class="muted">(lap ${x.best_lap})</span></td><td>${x.avg.toFixed(3)}</td>
+            <td class="${x.avg_loss > 0.25 ? "pos" : ""}">+${x.avg_loss.toFixed(3)}</td><td>+${x.best_lap_loss.toFixed(3)}</td><td>±${x.spread.toFixed(3)}</td></tr>`).join("") + "</tbody></table>";
+      }
+      const best = s.best_sectors || [];
+      html += `<div class="label" style="margin-top:12px">Laps (purple = best sector)</div><table class="tbl"><thead><tr><th>Lap</th><th>Time</th>` +
+        Array.from({ length: s.sector_count }, (_, i) => `<th>S${i + 1}</th>`).join("") + `<th></th></tr></thead><tbody>` +
+        s.lap_list.map((l) => `<tr class="${l.used ? "" : "unused"}"><td>${l.lap}</td><td>${fmtTime(l.lap_time)}</td>` +
+          l.sectors.map((x, i) => `<td class="${l.used && x != null && x === best[i] ? "best" : ""}">${x == null ? "–" : x.toFixed(3)}</td>`).join("") +
+          `<td class="muted small-text">${[l.pit_in ? "in-lap" : "", l.pit_out ? "out-lap" : "", l.clean ? "" : "not clean"].filter(Boolean).join(", ")}</td></tr>`).join("") +
+        "</tbody></table></div>";
+    });
+    $("#ss-view").innerHTML = html;
+  } catch (e) { msg($("#ss-msg"), e.message, "err"); }
+}
+
+$("#ss-file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  msg($("#ss-msg"), "Importing " + f.name + "…");
+  try {
+    const r = await fetch("/api/sessions/import?filename=" + encodeURIComponent(f.name), { method: "POST", body: f });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "Import failed");
+    msg($("#ss-msg"), "Imported.", "ok");
+    loadSessions(d.id);
+  } catch (err) { msg($("#ss-msg"), err.message, "err"); }
+  e.target.value = "";
+});
+$("#ss-targets").addEventListener("click", async () => {
+  const id = $("#ss-list").value; if (!id) return;
+  try {
+    const r = await api("/api/live/sector_targets", { method: "POST", body: { session_id: id } });
+    msg($("#ss-msg"), "Live sector targets set: " + r.targets.map((x) => x.toFixed(3)).join(" / "), "ok");
+  } catch (e) { msg($("#ss-msg"), e.message, "err"); }
+});
+$("#ss-delete").addEventListener("click", async () => {
+  const id = $("#ss-list").value; if (!id || !confirm("Delete this imported session?")) return;
+  await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+  loadSessions();
+});
 
 // ------------------------------------------------------------ settings
 async function loadSettings() {
@@ -340,11 +444,14 @@ async function loadSettings() {
   $("#s-following").checked = c.include_following;
   $("#s-record").checked = c.record_laps;
   $("#s-extra").value = (c.extra_drivers || []).join(", ");
+  $("#s-overlay").value = c.overlay_mode || "practice";
+  $("#s-opacity").value = c.overlay_opacity || 0.85;
 }
 $("#btn-save").addEventListener("click", async () => {
   const body = {
     units: $("#s-units").value, include_following: $("#s-following").checked,
     record_laps: $("#s-record").checked, extra_drivers: $("#s-extra").value.split(","),
+    overlay_mode: $("#s-overlay").value, overlay_opacity: parseFloat($("#s-opacity").value),
   };
   if ($("#s-token").value.trim()) body.garage61_token = $("#s-token").value.trim();
   try {

@@ -6,6 +6,8 @@ SimCoach is a local app for the PC that runs iRacing. It:
 - **Coaches you corner by corner while you drive.** After each corner you get feedback such as *"C3 +0.21s – braking 17 m too early, apex speed 8 km/h slower"*.
 - **Connects to Garage 61** and lists laps from **you, your teammates and drivers you follow** for the car and track you're on. Any of them can be your live reference or used in an analysis.
 - **Analyses laps after the session.** It shows delta, speed, throttle and brake traces, a track map coloured red where you lose time and green where you gain it, and a corner table. The table compares brake point, apex speed, exit speed, full-throttle point and coasting, and gives ranked coaching tips.
+- **Shows an in-game overlay while you practise.** A small always-on-top window over iRacing tells you, corner by corner, whether you **braked too early**, **carried too little minimum speed**, **turned in too late** or **got on the throttle late**. It also shows a *brake in 120 m → BRAKE* cue at the reference braking point, your live delta, and sector deltas.
+- **Imports Garage 61 session exports (.xlsx).** It shows best and theoretical-best laps, consistency, and how much time each sector costs you. Your best sectors become live sector targets for the same car and track.
 - **Records every clean lap** you drive to `%APPDATA%\SimCoach\laps`, so you can compare against your own past laps too.
 
 Everything runs on your PC. The dashboard is a local web page at `http://127.0.0.1:8061`.
@@ -34,6 +36,36 @@ The token is stored only on your PC in `%APPDATA%\SimCoach\config.json`. You can
 
 - The Garage 61 API only returns laps from yourself, your teammates and drivers you follow. There is no global lap search. To compare with someone fast, join a team with them or follow them on Garage 61. You can also add their Garage 61 slug under *Extra drivers*.
 - Viewing other drivers' telemetry needs a **Garage 61 Pro** plan.
+
+## In-game overlay
+
+The overlay starts with SimCoach. By default it only appears when you are **on track in a practice, testing or warm-up session**. You can change this in Settings to *Always* or *Off*.
+
+- Run iRacing in **borderless windowed** mode (Options → Graphics → untick *Fullscreen*). Windows can't draw any overlay on top of exclusive fullscreen.
+- **Drag** the overlay to move it, use the **mouse wheel** to resize it, and **right-click** for options (practice only / always / hide, bigger or smaller, quit). Position and size are remembered.
+- What it shows:
+  - **Delta** to your reference lap, and *LOSING / GAINING x.xx s here*
+  - **Brake cue**: a bar that fills as you approach the reference braking point, then turns red with *BRAKE*
+  - **Corner feedback** as it happens. Brake *x m too early* or *later*, Turn-in *x m too late* or *early*, Min speed *x km/h too slow*, and Throttle *x m late*. Red means fix it, amber is worth a look, green is on target.
+  - **Sector chips**: each sector against your target (imported Garage 61 best sectors, or your session best)
+- **Browser version:** `http://127.0.0.1:8061/overlay`. Use it as an OBS *Browser source*, on a second monitor, or on a tablet (start with `--host 0.0.0.0`). Add `?always=1` to show it outside practice too.
+
+All feedback is measured against your reference lap, which must have telemetry: a Garage 61 lap, one of your recorded laps, or your session best. Turn-in is detected from steering angle, at 30% of the reference driver's peak steering in that corner.
+
+## Garage 61 session exports
+
+In Garage 61, open a session or event and choose **Export → Excel**. Then open SimCoach's **Sessions** tab and import the `.xlsx`. Exports in `sample_data/` are imported automatically on first start. That folder includes your IMSA race at Le Mans in the Dallara P217.
+
+The export contains lap and sector times, not per-meter telemetry. From it SimCoach calculates:
+
+- your best lap and theoretical best (your best sectors added together)
+- your average lap and how consistent you were
+- per sector: your best, your average, the average time lost against your best, and how much your laps varied there
+- which sectors to focus on
+
+Slow outliers are left out using the 107% rule, along with in-laps, out-laps and unclean laps. The best sectors become live targets in the overlay automatically when you drive the same car and track.
+
+Example from the included export (race, 9 laps used): the best lap is 3:38.637 and the theoretical best is 3:37.833. **Sector 7** (0.37 s per lap on average) and **sector 1** (0.32 s) are where most time is left.
 
 ## How to train with it
 
@@ -65,7 +97,8 @@ If no reference is selected, SimCoach uses your session best as the reference.
 
 ```bash
 pip install -r requirements.txt pytest httpx
-python -m simcoach --demo        # run with the simulated driver
+python -m simcoach --demo        # run with the simulated driver (practice session)
+python -m simcoach --import export.xlsx   # import a Garage 61 export from the command line
 python -m pytest tests           # run tests
 ```
 
@@ -74,6 +107,8 @@ python -m pytest tests           # run tests
 | `simcoach/garage61.py` | Garage 61 API client (`https://garage61.net/api/v1`, Bearer token) |
 | `simcoach/lap.py` | Lap model, resampling, CSV import/export |
 | `simcoach/analysis.py` | Corner detection, delta, coaching tips |
-| `simcoach/live.py` | iRacing telemetry (pyirsdk), live lap builder, live delta and callouts |
+| `simcoach/live.py` | iRacing telemetry (pyirsdk), live lap builder, live delta, corner phase events, sectors |
+| `simcoach/overlay.py` | Native always-on-top overlay window (tkinter) |
+| `simcoach/sessions.py` | Garage 61 Excel export import and sector analysis |
 | `simcoach/server.py` | FastAPI REST API + WebSocket stream |
 | `simcoach/static/` | Dashboard UI (no external dependencies, works offline) |

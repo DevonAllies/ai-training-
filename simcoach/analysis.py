@@ -44,6 +44,7 @@ class CornerReport:
     min_speed_diff_kmh: float             # + = I was faster at the apex
     exit_speed_diff_kmh: float
     throttle_point_m: float | None        # + = I got on the throttle later
+    turn_in_m: float | None               # + = I turned in later than ref
     coast_m_diff: float                   # + = I coasted more
     tips: list[str] = field(default_factory=list)
 
@@ -116,6 +117,23 @@ def _throttle_on(throttle: np.ndarray, a: int, b: int, thr: float = 0.9) -> int 
     return None if i is None else a + i
 
 
+def steer_threshold(ref: Lap, a: int, b: int) -> float | None:
+    """Steering angle that counts as 'turned in' for this corner (30% of ref peak)."""
+    if ref.steer is None:
+        return None
+    peak = float(np.max(np.abs(ref.steer[a:b + 1])))
+    if peak < 1e-3:
+        return None
+    return 0.3 * peak
+
+
+def turn_in_bin(lap: Lap, a: int, limit: int, thr: float | None) -> int | None:
+    if thr is None or lap.steer is None:
+        return None
+    i = _first(np.abs(lap.steer[a:limit + 1]) > thr)
+    return None if i is None else a + i
+
+
 # ------------------------------------------------------------------ compare
 def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
     a, m, b = c.start, c.apex, c.end
@@ -146,6 +164,11 @@ def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
     mt = _throttle_on(me.throttle, my_apex, b)
     throttle_point_m = None if (rt is None or mt is None) else (mt - rt) * bin_m
 
+    thr = steer_threshold(ref, a, b)
+    r_ti = turn_in_bin(ref, a, ref_apex, thr)
+    m_ti = turn_in_bin(me, a, min(b, my_apex + w), thr)
+    turn_in_m = None if (r_ti is None or m_ti is None) else (m_ti - r_ti) * bin_m
+
     def coast(l: Lap):
         seg = slice(a, b + 1)
         return float(np.sum((l.throttle[seg] < 0.05) & (l.brake[seg] < 0.05))) * bin_m
@@ -156,7 +179,7 @@ def compare_corner(me: Lap, ref: Lap, c: Corner, bin_m: float) -> CornerReport:
         time_lost=time_lost, entry_lost=entry_lost, exit_lost=exit_lost,
         brake_point_m=brake_point_m, peak_brake_diff=peak_brake_diff,
         min_speed_diff_kmh=min_speed_diff, exit_speed_diff_kmh=exit_speed_diff,
-        throttle_point_m=throttle_point_m, coast_m_diff=coast_diff,
+        throttle_point_m=throttle_point_m, turn_in_m=turn_in_m, coast_m_diff=coast_diff,
     )
     rep.tips = coaching_tips(rep)
     return rep
@@ -180,6 +203,12 @@ def coaching_tips(r: CornerReport, units: str = "metric") -> list[str]:
     if r.brake_point_m is not None and r.brake_point_m > 8 and r.min_speed_diff_kmh < -3:
         tips.append(f"Braking {dist(r.brake_point_m)} later than the reference but overslowing "
                     f"- brake earlier and release smoother to carry speed.")
+    if r.turn_in_m is not None and r.turn_in_m > 8:
+        tips.append(f"Turning in {dist(r.turn_in_m)} late - start the turn earlier so you can "
+                    f"carry more speed to the apex.")
+    if r.turn_in_m is not None and r.turn_in_m < -8 and (r.exit_lost > 0.02 or r.min_speed_diff_kmh < -2):
+        tips.append(f"Turning in {dist(r.turn_in_m)} early - wait a moment longer; an early turn-in "
+                    f"forces you to slow down or run wide on exit.")
     if r.peak_brake_diff is not None and r.peak_brake_diff < -0.12 and r.entry_lost > 0.02:
         tips.append(f"Brake harder initially (peak {abs(r.peak_brake_diff) * 100:.0f}% lower than "
                     f"the reference), then trail off.")
@@ -195,7 +224,7 @@ def coaching_tips(r: CornerReport, units: str = "metric") -> list[str]:
     if r.exit_speed_diff_kmh < -3 and r.exit_lost > 0.02:
         tips.append(f"Exit speed {spd(r.exit_speed_diff_kmh)} lower - this costs time all the "
                     f"way down the next straight. Prioritise a good exit.")
-    if not tips:
+    if not tips and r.time_lost > 0.05:
         part = "entry" if r.entry_lost >= r.exit_lost else "exit"
         tips.append(f"Losing {r.time_lost:.2f}s, mostly on corner {part}. "
                     f"Compare the speed traces to find the difference.")

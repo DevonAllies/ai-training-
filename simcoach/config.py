@@ -45,6 +45,12 @@ class Config:
     extra_drivers: list[str] = field(default_factory=list)
     # Automatically save every clean lap you drive
     record_laps: bool = True
+    # In-game overlay: "practice" (only in practice/testing sessions), "always" or "off"
+    overlay_mode: str = "practice"
+    overlay_x: int = 60
+    overlay_y: int = 60
+    overlay_scale: float = 1.0
+    overlay_opacity: float = 0.85
 
     @classmethod
     def path(cls) -> Path:
