@@ -40,7 +40,7 @@ function showTab(name) {
   if (name === "corners") initCorners();
   if (name === "race") refreshRace();
   if (name === "progress") { initProgress(); loadGoal(); loadGame(); }
-  if (name === "race") loadRaceReports();
+  if (name === "race") { loadRaceReports(); loadPreps(); }
 }
 
 // ------------------------------------------------------------ live
@@ -553,8 +553,16 @@ async function uploadLapFile(f) {
         <td><button class="small primary" data-i="${l.index}" data-ref="1">Use as my reference</button>
             <button class="small" data-i="${l.index}">Save only</button></td></tr>`).join("");
     $("#tm-laps").classList.remove("hidden");
+    $("#tm-prep-row").classList.toggle("hidden", d.laps.length < 2);
   } catch (e) { msg($("#tm-msg"), e.message, "err"); }
 }
+$("#tm-prep").addEventListener("click", async () => {
+  if (!tm.upload) return;
+  try {
+    const p = await api("/api/prep/from_upload", { method: "POST", body: { upload_id: tm.upload.upload_id, driver: $("#tm-name").value.trim() || null } });
+    state.prepId = p.id; showTab("race");
+  } catch (e) { msg($("#tm-msg"), e.message, "err"); }
+});
 $("#tm-file").addEventListener("change", (e) => { if (e.target.files[0]) uploadLapFile(e.target.files[0]); e.target.value = ""; });
 const drop = $("#tm-drop");
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -1186,4 +1194,86 @@ async function loadRaceReports() {
 }
 $("#rr-list") && $("#rr-list").addEventListener("change", (e) => {
   $("#rr-open").href = "/race-report" + (e.target.value ? "?id=" + encodeURIComponent(e.target.value) : "");
+});
+
+// ------------------------------------------------------------ teammate race prep (.ibt)
+async function loadPreps() {
+  const list = await api("/api/preps").catch(() => []);
+  const sel = $("#prep-list");
+  sel.innerHTML = list.length ? list.map((p) => `<option value="${esc(p.id)}">${esc(p.driver)} · ${esc(p.track)}${p.track_config ? " " + esc(p.track_config) : ""} · ${esc(p.car)} · ${p.lap_count} laps</option>`).join("")
+    : `<option value="">No race prep yet – upload a teammate's multi-lap .ibt</option>`;
+  if (state.prepId && list.some((p) => p.id === state.prepId)) sel.value = state.prepId;
+  if (sel.value) renderPrep(await api("/api/prep/" + encodeURIComponent(sel.value)).catch(() => null));
+  else $("#prep-view").innerHTML = "";
+}
+const tile = (label, val, sub = "") => `<div class="card stat"><div class="label">${label}</div><div class="big">${val}</div><div class="muted small-text">${sub}</div></div>`;
+function renderPrep(p) {
+  const el = $("#prep-view"); if (!p) { el.innerHTML = ""; return; }
+  state.prep = p;
+  const pc = p.pace || {}, f = p.fuel || {}, e = p.eco, c = p.consistency || {};
+  el.innerHTML = `
+    <div class="summary">
+      ${tile("Race pace", fmtTime(pc.lap_time), `best ${fmtTime(pc.best)} · ${pc.laps} clean laps`)}
+      ${tile("Fuel / lap", f.per_lap ? f.per_lap.toFixed(2) + " L" : "–", f.min ? f.min.toFixed(2) + "–" + f.max.toFixed(2) + " L" : "no fuel data in the file")}
+      ${tile("Consistency", c.within_pct != null ? c.within_pct + "%" : "–", c.spread != null ? "within 0.5 s · ±" + c.spread.toFixed(2) + " s" : "")}
+      ${tile("Fuel-saving lap", e ? e.fuel_used.toFixed(2) + " L" : "–", e ? `−${e.saved_l.toFixed(2)} L for ${e.cost_s >= 0 ? "+" : ""}${e.cost_s.toFixed(2)} s vs race pace` : "no leaner lap found")}
+    </div>
+    <ul class="tips-list">${(p.takeaways || []).map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    ${p.stints && p.stints.length > 1 ? `<table class="tbl"><thead><tr><th>Stint</th><th>Laps</th><th>Avg</th><th>Drop-off</th><th>Fuel/lap</th></tr></thead><tbody>${p.stints.map((s) =>
+      `<tr><td>${s.stint}</td><td>${s.laps}</td><td>${fmtTime(s.avg)}</td><td>${s.dropoff == null ? "–" : (s.dropoff > 0 ? "+" : "") + s.dropoff.toFixed(3) + " s/lap"}</td><td>${s.fuel_per_lap ? s.fuel_per_lap.toFixed(2) + " L" : "–"}</td></tr>`).join("")}</tbody></table>` : ""}
+    <div class="actions" style="flex-wrap:wrap">
+      <button class="small primary" data-prep="planner">Use in endurance planner</button>
+      ${f.per_lap ? `<button class="small primary" data-prep="fuel-typical">Fuel training: match their ${f.per_lap.toFixed(2)} L/lap</button>` : ""}
+      ${e ? `<button class="small" data-prep="fuel-eco">Fuel training: match their fuel-save lap (${e.fuel_used.toFixed(2)} L)</button>` : ""}
+      ${p.files && p.files.eco ? `<button class="small" data-prep="ref-eco">Fuel-save lap as my reference</button>` : ""}
+      ${p.files && p.files.fastest ? `<button class="small" data-prep="ref-fast">Their fastest lap as my reference</button>` : ""}
+    </div>`;
+}
+function fillPlannerFromPrep(p) {
+  if (!p) return false;
+  setIf("#ep-lap", p.pace && p.pace.lap_time, fmtTime);
+  setIf("#ep-fpl", p.fuel && p.fuel.per_lap, (v) => v.toFixed(3));
+  msg($("#ep-src-msg"), `${p.driver}'s race prep: ${fmtTime(p.pace.lap_time)} race pace` +
+    (p.fuel.per_lap ? `, ${p.fuel.per_lap.toFixed(3)} L/lap from ${p.fuel.laps} laps.` : " (no fuel data in the file)."), "ok");
+  return true;
+}
+$("#prep-list").addEventListener("change", async (e) => {
+  state.prepId = e.target.value;
+  renderPrep(e.target.value ? await api("/api/prep/" + encodeURIComponent(e.target.value)).catch(() => null) : null);
+});
+$("#prep-file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  msg($("#prep-msg"), `Reading ${f.name} (${(f.size / 1e6).toFixed(1)} MB)…`);
+  try {
+    const r = await fetch("/api/laps/upload?" + new URLSearchParams({ filename: f.name }), { method: "POST", body: f });
+    const d = await r.json(); if (!r.ok) throw new Error(d.detail || "Upload failed");
+    const p = await api("/api/prep/from_upload", { method: "POST", body: { upload_id: d.upload_id } });
+    state.prepId = p.id; msg($("#prep-msg"), `Race prep built from ${p.lap_count} laps of ${p.driver}.`, "ok"); loadPreps();
+  } catch (err) { msg($("#prep-msg"), err.message, "err"); }
+});
+$("#prep-view").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-prep]"); const p = state.prep; if (!b || !p) return;
+  const act = b.dataset.prep;
+  try {
+    if (act === "planner") { fillPlannerFromPrep(p); $("#ep-go").scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+    if (act.startsWith("fuel-")) {
+      const r = await api(`/api/prep/${encodeURIComponent(p.id)}/fuel`, { method: "POST", body: { target: act === "fuel-eco" ? "eco" : "typical" } });
+      if (r.already) { msg($("#prep-msg"), r.message, "ok"); return; }
+      msg($("#prep-msg"), `Fuel training on: you use ${r.mine.toFixed(2)} L/lap, ${p.driver} ${r.goal.toFixed(2)} L – save ${r.save_per_lap.toFixed(2)} L per lap. Watch for LIFT on the overlay.`, "ok");
+      renderFuelPlan(r); return;
+    }
+    const file = act === "ref-eco" ? p.files.eco : p.files.fastest;
+    await api("/api/live/reference", { method: "POST", body: { lap: "local:" + file } });
+    msg($("#prep-msg"), act === "ref-eco" ? `Live delta is now against ${p.driver}'s fuel-save lap – match their time while saving fuel.`
+      : `Live delta is now against ${p.driver}'s fastest lap.`, "ok");
+    refreshReference && refreshReference();
+  } catch (err) { msg($("#prep-msg"), err.message, "err"); }
+});
+$("#ep-src-prep").addEventListener("click", async () => {
+  let p = state.prep;
+  if (!p) {
+    const t = (await planSources()).teammate;
+    if (t) p = await api("/api/prep/" + encodeURIComponent(t.id)).catch(() => null);
+  }
+  if (!fillPlannerFromPrep(p)) msg($("#ep-src-msg"), "No teammate race prep – upload their .ibt in the card above.", "err");
 });

@@ -169,6 +169,8 @@
       <label>Lap time (only for CSVs without a time column) <input id="tm-laptime" type="text" placeholder="1:29.307"></label>
     </div>
     <div id="tm-msg" class="msg"></div>
+    <div id="tm-prep-row" class="hidden" style="margin:8px 0"><button id="tm-prep" class="primary">Build race prep from all these laps (fuel &amp; endurance)</button>
+      <span class="muted small-text">Pace, fuel per lap, stints and where they lift and coast – for the Race tab.</span></div>
     <table class="tbl hidden" id="tm-laps"><thead><tr><th>Lap</th><th>Time</th><th>Clean</th><th></th></tr></thead><tbody></tbody></table>
     <details class="muted small-text"><summary>How does my teammate get the .ibt file?</summary>
       In iRacing, press <b>Alt+L</b> in the car to start telemetry logging (or turn it on permanently in the iRacing
@@ -285,6 +287,15 @@
       <a id="rr-open" href="/race-report" target="_blank"><button class="small primary">Open race report</button></a>
     </div>
   </div>
+  <div class="card" id="prep-card">
+    <div class="label">Teammate race prep – from their .ibt (a stint or a whole race)</div>
+    <div class="filters">
+      <select id="prep-list"></select>
+      <label class="filebtn">Upload teammate .ibt <input id="prep-file" type="file" accept=".ibt"></label>
+    </div>
+    <div id="prep-msg" class="msg"></div>
+    <div id="prep-view"></div>
+  </div>
   <div class="summary" id="race-cards"></div>
   <div class="analyze-grid">
     <div class="card">
@@ -308,6 +319,7 @@
         <button id="ep-src-g61" class="small">Fill from Garage 61</button>
         <select id="ep-g61-scope" class="small"><option value="me">my laps</option><option value="team">me + teammates</option></select>
         <button id="ep-src-export" class="small">Fill from imported session</button>
+        <button id="ep-src-prep" class="small">Fill from teammate prep</button>
       </div>
       <div id="ep-src-msg" class="msg small-text"></div>
       <div class="filters">

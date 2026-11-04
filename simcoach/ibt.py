@@ -187,7 +187,7 @@ def _extract(rec, v, si) -> tuple[dict, list[IBTLap]]:
         lap.label = f"{info['driver'] or 'Teammate'} {fmt_time(lap_time)}"
         lap.meta = {"track": " - ".join(x for x in (info["track"], info["track_config"]) if x),
                     "car": info["car"], "driver": info["driver"], "source": "ibt", "lap": number,
-                    "valid": valid}
+                    "valid": valid, "pit": bool(pit[seg].any())}
         if "fuel" in extras:
             lap.meta["fuel_used"] = round(float(extras["fuel"][a] - extras["fuel"][b - 1]), 3)
         laps.append(IBTLap(number, lap_time, valid, lap))
