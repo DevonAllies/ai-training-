@@ -339,6 +339,7 @@ def test_no_memory_growth_over_long_session():
     eng.traffic.events = _c.deque(maxlen=5)
     eng.traffic.laps = _c.deque(maxlen=5)
     eng.game.feed = _c.deque(maxlen=5)
+    eng._clean_times = _c.deque(maxlen=1)           # 8 KB per clean lap; fills slowly when laps have traffic
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
