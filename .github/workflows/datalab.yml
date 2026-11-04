@@ -117,7 +117,7 @@ jobs:
       - name: Smoke test the built app (all exercise solutions)
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then EXE=dist/DataLabTrainer/DataLabTrainer.exe; else EXE=dist/DataLabTrainer/DataLabTrainer; fi
-          python packaging/smoke_test.py "$EXE"
+          python packaging/smoke_test.py "$EXE" --require-r
 
       - name: Windows installer and portable zip
         if: runner.os == 'Windows'
@@ -125,7 +125,7 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
-          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" packaging\DataLabTrainer.iss
+          & $iscc /Q "/DMyAppVersion=${{ steps.ver.outputs.version }}" packaging\DataLabTrainer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path dist\DataLabTrainer -DestinationPath "dist\DataLabTrainer-${{ steps.ver.outputs.version }}-windows-portable.zip"
 

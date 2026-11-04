@@ -1,7 +1,7 @@
 """Smoke-test a packaged DataLab build: start it, then run every exercise's model
 solution through its API and check that it passes.
 
-    python packaging/smoke_test.py dist/DataLabTrainer/DataLabTrainer [--skip-r]
+    python packaging/smoke_test.py dist/DataLabTrainer/DataLabTrainer [--skip-r | --require-r]
 
 Uses only the standard library, so any Python can run it. Exits non-zero on failure.
 """
@@ -37,6 +37,7 @@ def call(path: str, body: dict | None = None, timeout: int = 600):
 def main() -> int:
     exe = sys.argv[1]
     skip_r = "--skip-r" in sys.argv
+    require_r = "--require-r" in sys.argv
     home = tempfile.mkdtemp(prefix="datalab-smoke-")
     env = dict(os.environ, DATALAB_HOME=home)
     proc = subprocess.Popen([exe, "--no-browser", "--port", str(PORT)], env=env,
@@ -61,6 +62,9 @@ def main() -> int:
         print("Python:", py.get("version"), py.get("path"))
         missing = [k for k, v in py.get("packages", {}).items() if not v]
         print("R:", envinfo["r"].get("version"), envinfo["r"].get("path"))
+        if require_r and not envinfo["r"].get("version"):
+            print("R is required (--require-r) but the app did not find Rscript.")
+            return 1
         if missing:
             print("Packages missing from the build:", missing)
             return 1
@@ -82,7 +86,9 @@ def main() -> int:
         if "stdlib ok" not in res.get("stdout", ""):
             failures.append("stdlib-imports")
             print(res.get("stderr"))
-        print(f"{len(failures)} failure(s)")
+        ran = sum(1 for e in cur.exercises if not (e.lang == "r" and (skip_r or not envinfo["r"].get("version"))))
+        print(f"SUMMARY: {ran - len([f for f in failures if f != 'stdlib-imports'])}/{ran} exercise solutions passed, "
+              f"{len(failures)} failure(s)")
         return 1 if failures else 0
     finally:
         proc.terminate()
