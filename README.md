@@ -228,12 +228,13 @@ When a teammate sends you the `.ibt` of a stint or a whole race, upload it on th
 - **Race pace:** typical lap (median of clean laps within 3 % of the best), best lap, and consistency.
 - **Stints:** split at pit stops, with laps, average and pace drop-off (tyres) for each.
 - **Fuel:** fuel per lap (median of clean laps), its range, and fuel per stint.
-- **Fuel-saving lap:** their most fuel-efficient clean lap, what it saved, and what it cost against their race pace. It also shows *where* they lift and coast: per corner, how many metres earlier they come off the throttle than on their fastest lap.
+- **Fuel-saving lap:** their most fuel-efficient clean lap, what it saved, and what it cost against their race pace. It also shows *where* they lift and coast: per corner, how many metres earlier they come off the throttle than on their fastest lap, and how far they coast to the brakes. Each braking zone is the one nearest that corner's apex (never the previous corner's), and corners use the track's corner names.
 
 Then you can:
 
 - **Use in endurance planner:** fills in their race pace and fuel per lap. "Fill from teammate prep" in the planner does the same.
-- **Fuel training: match their fuel per lap (or their fuel-save lap):** compares your own fuel per lap with theirs and turns on lift-and-coast cues for the difference.
+- **Fuel training: match their fuel-save lap:** **LIFT** is cued at the points where your teammate actually lifted on that lap (track positions from their file), before your own braking point for each corner. The target is their fuel per lap on that lap.
+- **Fuel training: match their typical fuel per lap:** same target idea, but the lift points are estimated from your own lap.
 - **Fuel-save lap as my reference:** your live delta runs against their fuel-saving lap, so you learn to save fuel without losing more time than they did.
 - **Their fastest lap as my reference.**
 

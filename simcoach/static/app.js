@@ -378,6 +378,15 @@ function renderFuelPlan(p) {
   const el = $("#fs-plan");
   if (!p) { el.innerHTML = '<span class="muted">Fuel saving is off.</span>'; return; }
   const x = p.extra_lap ? `<p>Tank lasts <b>${p.extra_lap.laps_now.toFixed(2)}</b> laps now – goal <b>${p.extra_lap.laps_goal}</b>: save ${fmtL(p.extra_lap.save_per_lap, 3)} per lap.</p>` : "";
+  if (p.source === "teammate") {
+    el.innerHTML = `<p><b>Lifting like ${esc(p.who)}</b> on their fuel-save lap: target ${fmtL(p.goal_fpl, 2)} per lap` +
+      (p.fuel_per_lap ? ` (you use ${fmtL(p.fuel_per_lap, 2)} – save ${fmtL(p.target_l, 2)})` : "") +
+      (p.total_lost_s != null ? `. It cost them ${p.total_lost_s >= 0 ? "+" : ""}${p.total_lost_s.toFixed(2)} s per lap.` : ".") + `</p>
+      <table class="tbl"><thead><tr><th>Corner</th><th>Lift before your brake point</th><th>${esc(p.who)} lifted earlier by</th><th>Time cost (theirs)</th></tr></thead><tbody>` +
+      (p.plan || []).map((z) => `<tr><td><b>${esc(z.title || z.corner)}</b></td><td>${dist(z.lift_m)}</td><td>${z.teammate_lift_earlier_m != null ? dist(z.teammate_lift_earlier_m) : "–"}</td><td>${z.lost_s != null ? z.lost_s.toFixed(2) + " s" : "–"}</td></tr>`).join("") +
+      `</tbody></table>`;
+    return;
+  }
   el.innerHTML = x + `<p><b>${p.reached ? "Plan" : "Best possible"}:</b> save ~${fmtL(p.total_saved_l, 3)} per lap for ~${p.total_lost_s.toFixed(2)} s per lap (estimate${p.coast_model.measured ? ", coast-down measured from your lap" : ", typical coast-down – drive with some lifts to measure yours"}).</p>
     <table class="tbl"><thead><tr><th>Corner</th><th>Lift before brake point</th><th>Fuel saved</th><th>Time cost</th></tr></thead><tbody>` +
     (p.plan || []).map((z) => `<tr><td><b>${esc(z.title || z.corner)}</b> <span class="muted">${z.speed_kmh} km/h</span></td><td>${dist(z.lift_m)}</td><td>${z.saved_l.toFixed(3)} L</td><td>${z.lost_s.toFixed(3)} s</td></tr>`).join("") +
@@ -1263,7 +1272,8 @@ $("#prep-view").addEventListener("click", async (ev) => {
     if (act.startsWith("fuel-")) {
       const r = await api(`/api/prep/${encodeURIComponent(p.id)}/fuel`, { method: "POST", body: { target: act === "fuel-eco" ? "eco" : "typical" } });
       if (r.already) { msg($("#prep-msg"), r.message, "ok"); return; }
-      msg($("#prep-msg"), `Fuel training on: you use ${r.mine.toFixed(2)} L/lap, ${p.driver} ${r.goal.toFixed(2)} L – save ${r.save_per_lap.toFixed(2)} L per lap. Watch for LIFT on the overlay.`, "ok");
+      msg($("#prep-msg"), `Fuel training on: you use ${r.mine.toFixed(2)} L/lap, ${p.driver} ${r.goal.toFixed(2)} L – save ${r.save_per_lap.toFixed(2)} L per lap. ` +
+        (r.source === "teammate" ? `LIFT cues are at ${p.driver}'s own lift points (${r.plan.length} corners).` : `LIFT cues are estimated from your own lap.`), "ok");
       renderFuelPlan(r); return;
     }
     const file = act === "ref-eco" ? p.files.eco : p.files.fastest;

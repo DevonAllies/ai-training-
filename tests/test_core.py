@@ -1462,3 +1462,65 @@ def test_consistency_faster_laps_count_and_fuel_gate():
     # strict mode: the old two-sided window
     ct.start(90.0, 0.3, 5, faster_ok=False)
     assert not ct.add_lap(89.4, True, None)["inside"]
+
+
+def test_prep_lift_points_braking_zone_and_teammate_cues(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from simcoach import prep as pr
+    from simcoach.lap import Lap as _Lap
+    ref = demo.reference_lap()
+    # chicane: braking for the previous corner just before - the zone for THIS apex is found
+    lap = _Lap(**{k: getattr(ref, k) for k in ref.__dataclass_fields__})
+    lap.brake = np.zeros(len(GRID)); lap.brake[100:111] = 1.0; lap.brake[118:131] = 0.5   # previous zone harder
+    assert pr.braking_zone_start(lap, 135, 100) == 118
+    assert pr.braking_zone_start(lap, 116, 100, floor=111) is None        # never past the previous apex
+    lap.brake[:] = 0.0
+    assert pr.braking_zone_start(lap, 135, 100) is None                 # flat-out corner: no zone
+    # fuel-save lap lifts 60 m earlier before ONE corner only
+    eco = _Lap(**{k: getattr(ref, k) for k in ref.__dataclass_fields__})
+    eco.throttle = ref.throttle.copy()
+    corners = detect_corners(ref)
+    c = corners[2]
+    back = int(600 / (ref.track_length / len(GRID)))
+    b = pr.braking_zone_start(ref, c.apex, back)
+    n60 = int(round(60 / (ref.track_length / len(GRID))))
+    eco.throttle[b - n60:b] = 0.0
+    pts = pr.lift_points(ref, eco, "Demo Ring - GP")
+    assert len(pts) == 1 and pts[0]["index"] == c.index
+    assert 50 <= pts[0]["lift_earlier_m"] <= 70 and abs(pts[0]["brake_pct"] - float(GRID[b])) < 0.002
+    assert pr.lift_points(ref, ref) == []                                # identical laps: nothing to report
+    # engine: LIFT cues at the teammate's lift point, before my brake point for that corner
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(ref)
+    plan = eng.enable_fuel_save_points(pts, 2.9, "Max")
+    assert plan["available"] and plan["source"] == "teammate" and len(plan["plan"]) == 1
+    z = plan["plan"][0]
+    assert z["index"] == c.index and 50 <= z["lift_m"] <= 70 and z["lift_bin"] == round(pts[0]["lift_pct"] * len(GRID))
+    assert eng.fuel_target_per_lap() == 2.9
+    cue = eng._brake_cue(float(GRID[z["lift_bin"]]) - 0.001)
+    assert cue and cue["kind"] == "lift" and cue["corner"] == z["corner"]
+
+
+def test_prep_fuel_training_uses_teammate_lift_points(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    p = tmp_path / "stint.ibt"
+    _make_race_ibt(p)
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    up = client.post("/api/laps/upload", params={"filename": "stint.ibt"}, content=p.read_bytes()).json()
+    prep = client.post("/api/prep/from_upload", json={"upload_id": up["upload_id"]}).json()
+    pts = prep["eco"]["lift_points"]
+    assert len(pts) == 7 and all(65 <= x["lift_earlier_m"] <= 95 and 65 <= x["coast_m"] <= 95 for x in pts)
+    assert len({x["brake_pct"] for x in pts}) == 7                        # every corner its own braking zone
+    _drive(eng, 2.3)
+    r = client.post(f"/api/prep/{prep['id']}/fuel", json={"target": "eco"}).json()
+    assert r["active"] and r["source"] == "teammate" and r["goal"] == prep["eco"]["fuel_used"]
+    assert len(r["plan"]) == len(pts) and all(65 <= z["lift_m"] <= 95 for z in r["plan"])
+    # "match their typical fuel" still uses your own estimated plan
+    r2 = client.post(f"/api/prep/{prep['id']}/fuel", json={"target": "typical"}).json()
+    assert r2.get("already") or (r2["active"] and r2.get("source") != "teammate")

@@ -1136,7 +1136,13 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if save <= 0.005:
             return {"active": False, "already": True, "mine": mine, "goal": goal,
                     "message": f"You already use {mine:.2f} L per lap - at or under {p['driver']}'s {goal:.2f} L."}
-        plan = engine.enable_fuel_save(save_per_lap=save)
+        points = (p.get("eco") or {}).get("lift_points") or []
+        if body.target == "eco" and points and points[0].get("lift_pct") is not None:
+            # lift exactly where the teammate lifted on their fuel-save lap
+            plan = engine.enable_fuel_save_points(points, goal, p["driver"], p.get("eco"))
+            if plan.get("available"):
+                return {"active": True, "mine": mine, "goal": goal, "save_per_lap": save, **plan}
+        plan = engine.enable_fuel_save(save_per_lap=save)      # your own lap: estimated lift points
         if not plan.get("available"):
             raise HTTPException(422, plan.get("reason", "Fuel saving plan not available"))
         return {"active": True, "mine": mine, "goal": goal, "save_per_lap": save, **plan}
