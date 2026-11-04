@@ -2,7 +2,7 @@ id: model
 title: Model
 summary: Features, train/test splits, regression and classification, and honest evaluation.
 --- lesson
-# Stage 4 · Modelling
+# Module 6 · Modelling
 
 A model is a rule learned from data that **predicts** a target from inputs (features).
 Ridgeway has two modelling questions:

@@ -2,7 +2,7 @@ id: explain
 title: Explain & Shape (SHAP)
 summary: Explain models with SHAP values, then shape results into tables a reader can act on.
 --- lesson
-# Stage 5 · Explain & Shape
+# Module 8 · Explain & Shape
 
 A model that nobody understands won't be trusted or used. This stage has two parts:
 

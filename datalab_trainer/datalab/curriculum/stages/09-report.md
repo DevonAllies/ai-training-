@@ -2,7 +2,7 @@ id: report
 title: Report
 summary: Turn the analysis into a clear, honest, reproducible report that leads to a decision.
 --- lesson
-# Stage 6 · Report writing
+# Module 9 · Report writing
 
 The report is the product. Most readers only read the first paragraph, so **lead with the
 answer** and keep the method for later sections.

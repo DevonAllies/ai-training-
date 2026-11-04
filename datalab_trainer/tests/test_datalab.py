@@ -57,7 +57,8 @@ def _skip_reason(ex) -> str | None:
 
 
 def test_curriculum_shape():
-    assert [s.id for s in CUR.stages] == ["import", "clean", "eda", "model", "explain", "report"]
+    assert [s.id for s in CUR.stages] == ["basics", "import", "clean", "eda", "visualise", "stats", "model",
+                                         "forecast", "explain", "report"]
     ids = [e.id for e in CUR.exercises]
     assert len(ids) == len(set(ids)), "duplicate exercise ids"
     for s in CUR.stages:
@@ -157,7 +158,7 @@ def test_http_api(tmp_path):
         st, body = get("/static/app.js")
         assert st == 200
         ov = json.loads(get("/api/overview")[1])
-        assert len(ov["stages"]) == 6 and ov["exercises"]
+        assert len(ov["stages"]) == 10 and ov["exercises"]
         ex = json.loads(get("/api/exercise/import-sql-1")[1])
         assert "solution" not in ex and ex["starter"]
         assert post("/api/run", {"exercise": "import-sql-1", "code": "SELECT 1", "check": True}, header=False)[0] == 403

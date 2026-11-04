@@ -2,7 +2,7 @@ id: clean
 title: Clean
 summary: Fix duplicates, inconsistent labels, bad numbers, impossible values and mixed dates.
 --- lesson
-# Stage 2 · Clean
+# Module 2 · Clean
 
 Cleaning turns *what the source system gave you* into *what the data actually means*.
 It's usually the biggest part of a real project. Do it **in code**, never by hand in a

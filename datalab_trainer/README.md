@@ -4,12 +4,14 @@ DataLab Trainer is a local training app for learning the **whole analytics workf
 **SQL, Python and R**:
 
 ```
-Import  →  Clean  →  Explore (EDA)  →  Model  →  Explain (SHAP) & Shape  →  Report
+0 Foundations (optional)
+1 Import → 2 Clean → 3 Explore (EDA) → 4 Visualise → 5 Statistics & testing
+  → 6 Model → 7 Forecast → 8 Explain (SHAP) & Shape → 9 Report
 ```
 
 You work as an analyst for *Ridgeway Retail*, a fictional subscription retailer, and
 answer a real business question: *which customers churn, why, and what should we do about it?*
-Every stage has a lesson, auto-checked exercises in all three languages and a quiz. Then
+Every module has a lesson, auto-checked exercises in all three languages and a quiz. Then
 you do a **capstone project** on a new, messy dataset and write it up in the built-in
 **Report Builder**.
 
@@ -21,25 +23,29 @@ your browser as the interface. It works offline.
 
 | | |
 |---|---|
-| **6 stages** | Import · Clean · Explore · Model · Explain & Shape · Report. Each lesson's code samples switch between SQL / Python / R |
-| **44 exercises** | starter code, hints, a model solution and an **automatic checker** for each. Core and *stretch* levels |
-| **25 quiz questions** | concept checks with explanations |
+| **10 training modules** | Foundations · Import · Clean · Explore · Visualise · Statistics · Model · Forecast · Explain & Shape · Report. Each lesson's code samples switch between SQL / Python / R |
+| **75 exercises** | starter code, hints, a model solution and an **automatic checker** for each. Core and *stretch* levels |
+| **42 quiz questions** | concept checks with explanations |
 | **Capstone project** | daily bike-rental demand: messy raw data, a validator for your cleaned file, guided steps, notes |
 | **Playground** | free coding in any language against the same datasets, with snippets |
 | **Datasets browser** | preview and profile every file, with code to load it in each language |
 | **Report Builder** | sectioned report template, insert charts from your runs, a rubric that checks your draft, export to self-contained HTML / Markdown, print to PDF |
-| **Progress tracking** | dashboard with a stage × language matrix; your code is auto-saved |
+| **Progress tracking** | dashboard with a module × language matrix; your code is auto-saved |
 
-### What you learn at each stage
+### What you learn in each module
 
-| Stage | SQL (DuckDB) | Python | R |
+| Module | SQL (DuckDB) | Python | R |
 |---|---|---|---|
-| **Import** | `read_csv_auto`, `read_json_auto`, `DESCRIBE` | pandas CSV/JSON, `sqlite3`, dtypes | `read.csv`, `colClasses`, `as.Date` |
-| **Clean** | `QUALIFY` de-dup, `CASE` mapping, `TRY_CAST`, `try_strptime`, window medians | `drop_duplicates`, `.str`, `to_numeric`, imputation, explicit date formats, assertions, a reusable cleaning function | `duplicated`, `trimws`, `gsub`, lookup vectors, `stopifnot` |
-| **EDA** | group rates, `date_trunc`, `corr`, `quantile_cont`, segments | `describe`, `groupby`, `pd.cut`, matplotlib charts, correlation matrix, resampling | `summary`, `tapply`, `cut`, `hist`/`boxplot`, `cor` |
-| **Model** | `regr_slope/intercept/r2`, feature tables with joins, confusion matrix of a rule | train/test split, `LinearRegression`, pipelines + `LogisticRegression`, ROC AUC, cross-validation, random forest | `lm`, `glm(binomial)`, odds ratios, AUC by hand |
-| **Explain & Shape** | linear SHAP values in SQL, `PIVOT`/conditional aggregation | **SHAP by hand** (additivity), **`shap.TreeExplainer`** beeswarm, `pivot_table`/`melt` | SHAP by hand for `lm`, cross-tabs, long format |
-| **Report** | KPI table for the summary | Markdown and **self-contained HTML reports generated from code** | `sprintf`/`writeLines` reports (→ R Markdown / Quarto) |
+| **0 Foundations** *(optional)* | `SELECT`, `WHERE`, `ORDER BY`, `GROUP BY`, `HAVING` | variables, lists, loops, dictionaries, functions, first pandas steps | vectors, functions, indexing, data frames |
+| **1 Import** | `read_csv_auto`, `read_json_auto`, `DESCRIBE` | pandas CSV/JSON, `sqlite3`, dtypes | `read.csv`, `colClasses`, `as.Date` |
+| **2 Clean** | `QUALIFY` de-dup, `CASE` mapping, `TRY_CAST`, `try_strptime`, window medians | `drop_duplicates`, `.str`, `to_numeric`, imputation, explicit date formats, assertions, a reusable cleaning function | `duplicated`, `trimws`, `gsub`, lookup vectors, `stopifnot` |
+| **3 EDA** | group rates, `date_trunc`, `corr`, `quantile_cont`, segments | `describe`, `groupby`, `pd.cut`, matplotlib charts, correlation matrix, resampling | `summary`, `tapply`, `cut`, `hist`/`boxplot`, `cor` |
+| **4 Visualise** | chart-ready data: histogram bins, shares with window functions | choosing the chart, small multiples, decluttered and labelled report charts | `par(mfrow)`, labelled `barplot` + `text()` |
+| **5 Statistics** | confidence intervals, two-proportion z-test | Welch t-tests, chi-square tests, bootstrap CIs | `t.test`, `chisq.test`, `prop.test`, bootstrap with `replicate` |
+| **6 Model** | `regr_slope/intercept/r2`, feature tables with joins, confusion matrix of a rule | train/test split, `LinearRegression`, pipelines + `LogisticRegression`, ROC AUC, cross-validation, random forest | `lm`, `glm(binomial)`, odds ratios, AUC and k-fold cross-validation by hand |
+| **7 Forecast** | moving averages, `lag` year-over-year, baseline MAE | time-based split, baselines, regression with trend/Fourier/promo features, prediction bands, Holt-Winters | `ts`, `decompose`, `HoltWinters`, `lm` forecasts |
+| **8 Explain & Shape** | linear SHAP values in SQL, `PIVOT`/conditional aggregation | **SHAP by hand** (additivity), **`shap.TreeExplainer`** beeswarm, `pivot_table`/`melt` | SHAP by hand for `lm`, cross-tabs, long format |
+| **9 Report** | KPI table, formatted findings table | Markdown and **self-contained HTML reports generated from code**, Excel deliverables | `sprintf`/`writeLines` reports, Markdown tables and linked charts (→ R Markdown / Quarto) |
 
 ## Install
 
@@ -116,11 +122,12 @@ All data is synthetic and generated by `tools/make_datasets.py` with a fixed see
 | `orders.csv` | 4,000 | orders 2021–2024 |
 | `products.json` | 6 | product categories and margins |
 | `ridgeway.db` | – | SQLite: `stores`, `targets` |
+| `store_sales.csv` | 209 | weekly sales 2021–2024 with trend, a December peak and promotion weeks (Module 7) |
 | `rentals_raw.csv` | 736 | capstone: daily bike rentals with duplicates, `"65%"` humidity, missing temperatures and a `-99` sensor code |
 
 ## For trainers: adding content
 
-* A stage is a Markdown file in `datalab/curriculum/stages/` with a `--- lesson` and a `--- quiz` section.
+* A module is a Markdown file in `datalab/curriculum/stages/` named `NN-id.md` (NN sets the order) with a `--- lesson` and a `--- quiz` section.
 * An exercise is a text file in `datalab/curriculum/exercises/` with a short header
   (`id`, `stage`, `lang`, `title`, optional `level`, `ordered`, `needs`) and sections
   `--- task`, `--- starter`, `--- solution`, `--- check`, `--- hints`.

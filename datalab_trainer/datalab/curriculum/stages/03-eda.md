@@ -2,7 +2,7 @@ id: eda
 title: Explore (EDA)
 summary: Summaries, group comparisons, distributions, relationships and charts that answer questions.
 --- lesson
-# Stage 3 · Exploratory Data Analysis
+# Module 3 · Exploratory Data Analysis
 
 EDA is **asking the data questions** before you build anything. The business question for
 Ridgeway is: *Which customers leave (churn), and what drives how much they spend?*

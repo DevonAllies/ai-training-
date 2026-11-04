@@ -10,7 +10,7 @@ Use DuckDB's `read_csv_auto` to read **`data/customers_raw.csv`** and return **o
 | `n_rows` | number of rows in the file |
 | `n_customers` | number of *distinct* `customer_id` values |
 
-If the two numbers differ, the file has duplicates. Note them down, because you'll fix them in stage 2.
+If the two numbers differ, the file has duplicates. Note them down, because you'll fix them in Module 2 (Clean).
 --- starter
 -- Count rows and distinct customers in the raw CRM export
 SELECT

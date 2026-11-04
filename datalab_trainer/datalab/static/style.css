@@ -76,9 +76,8 @@ main { min-width: 0; }
   background: conic-gradient(var(--ok) calc(var(--p) * 1%), var(--panel2) 0); }
 .ring > div { width: 104px; height: 104px; border-radius: 50%; background: var(--panel); display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; }
 .ring b { font-size: 1.9rem; } .ring span, .ring small { color: var(--muted); font-size: .8rem; }
-.pipeline { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
-.pipeline .arrow { align-self: center; color: var(--muted); font-size: 1.2rem; }
-.stagecard { flex: 1 1 0; min-width: 138px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 12px 10px; color: var(--text); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+.pipeline { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.stagecard { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 12px 10px; color: var(--text); box-shadow: var(--shadow); display: flex; flex-direction: column; }
 .stagecard:hover { border-color: var(--accent); text-decoration: none; }
 .stagecard .si { font-size: 1.3rem; color: var(--accent); }
 .stagecard .sn { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -270,8 +269,7 @@ pre.warnout { background: var(--warn-weak); color: var(--warn); }
   .hero { flex-direction: column; align-items: flex-start; }
   .cols, .datagrid { grid-template-columns: 1fr; }
   .filelist { position: static; }
-  .pipeline { flex-direction: column; }
-  .pipeline .arrow { transform: rotate(90deg); }
+  .pipeline { grid-template-columns: 1fr 1fr; }
 }
 
 /* layout fixes */

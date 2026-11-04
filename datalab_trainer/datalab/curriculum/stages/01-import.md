@@ -2,7 +2,7 @@ id: import
 title: Import
 summary: Get data out of files and databases and into a table you can trust.
 --- lesson
-# Stage 1 · Import
+# Module 1 · Import
 
 Every analysis starts by getting data into memory **without silently changing it**.
 In this course you work for *Ridgeway Retail*, a subscription retailer. Its data lives in
@@ -14,7 +14,7 @@ several places, just like at a real company:
 | `data/orders.csv` | every order 2021–2024 | CSV |
 | `data/products.json` | product categories and margins | JSON |
 | `data/ridgeway.db` | stores and revenue targets | SQLite database |
-| `data/customers.csv` | the *cleaned* customer table (answer key for stage 2) | CSV |
+| `data/customers.csv` | the *cleaned* customer table (answer key for Module 2) | CSV |
 | `data/rentals_raw.csv` | bike rentals, used in the capstone project | CSV |
 
 All paths are relative to your **workspace** folder (shown on the Setup page), so the same

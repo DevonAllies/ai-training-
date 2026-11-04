@@ -14,6 +14,10 @@
     model: svg('<path d="M4 18c4 0 4-12 8-12s4 12 8 12"/><circle cx="12" cy="6" r="1"/>'),
     explain: svg('<path d="M12 3l2.5 5.5L20 9l-4 4 1 6-5-3-5 3 1-6-4-4 5.5-.5z"/>'),
     report: svg('<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7M9 8h3"/>'),
+    basics: svg('<path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4zM20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/>'),
+    visualise: svg('<circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 5"/>'),
+    stats: svg('<path d="M3 20c3 0 4-14 9-14s6 14 9 14"/><path d="M12 6v14"/>'),
+    forecast: svg('<path d="M3 17l5-5 4 3 4-6"/><path d="M16 9l5-4" stroke-dasharray="2 2"/><path d="M3 21h18"/>'),
   };
   let overview = null;
 
@@ -123,7 +127,10 @@
 
   // ------------------------------------------------------------------ dashboard
   function nextExercise() {
-    return overview.exercises.find(e => !e.passed && e.level === 1) || overview.exercises.find(e => !e.passed);
+    // Skip the optional Module 0 for learners who have already started the main modules
+    const started = overview.exercises.some(e => e.passed && e.stage !== "basics");
+    const pool = overview.exercises.filter(e => !(started && e.stage === "basics"));
+    return pool.find(e => !e.passed && e.level === 1) || pool.find(e => !e.passed) || overview.exercises.find(e => !e.passed);
   }
   function home() {
     const total = overview.exercises.length;
@@ -134,11 +141,11 @@
       const q = overview.quiz[s.id];
       return `<a class="stagecard" href="#/stage/${s.id}">
         <div class="si">${STAGE_ICON[s.id] || "•"}</div>
-        <div class="sn">Stage ${s.order}</div><div class="st">${esc(s.title)}</div>
+        <div class="sn">Module ${s.order}</div><div class="st">${esc(s.title)}</div>
         <div class="ss">${esc(s.summary)}</div>
         <div class="bar"><span style="width:${st.total ? 100 * st.done / st.total : 0}%"></span></div>
         <div class="sm">${st.done}/${st.total} exercises${q ? ` · quiz ${q.best}/${q.total}` : ""}</div></a>`;
-    }).join('<div class="arrow" aria-hidden="true">→</div>');
+    }).join("");
     const langs = ["sql", "python", "r"];
     const matrix = `<table class="matrix"><thead><tr><th></th>${langs.map(l => `<th>${LANG[l]}</th>`).join("")}</tr></thead><tbody>` +
       overview.stages.map(s => `<tr><th><a href="#/stage/${s.id}/exercises">${esc(s.title)}</a></th>` + langs.map(l => {
@@ -162,15 +169,16 @@
           <div><b>${done}</b><span>of ${total}</span><small>exercises</small></div>
         </div>
       </header>
-      <h2>The pipeline</h2>
+      <h2>The modules</h2>
+      <p class="muted">Module 0 is optional if you already know some SQL, Python or R. Modules 1-9 follow a real analysis from raw data to report.</p>
       <div class="pipeline">${pipeline}</div>
       <div class="cols">
         <section class="card"><h2>Progress by language</h2>${matrix}
-          <p class="muted">Each stage has exercises in all three languages. Do one language first, then come back and
+          <p class="muted">Each module has exercises in all three languages. Do one language first, then come back and
           compare how the others solve the same problem.</p></section>
         <section class="card"><h2>How it works</h2>
           <ol class="steps">
-            <li><b>Read the lesson</b> for a stage. Code samples switch between SQL, Python and R.</li>
+            <li><b>Read the lesson</b> for a module. Code samples switch between SQL, Python and R.</li>
             <li><b>Do the exercises.</b> <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs your code, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> checks it.</li>
             <li><b>Take the quiz</b> to test the concepts.</li>
             <li><b>Do the capstone</b> on a new dataset, then write it up in the <a href="#/report">Report Builder</a>.</li>
@@ -190,7 +198,7 @@
     const idx = overview.stages.findIndex(x => x.id === sid);
     const prev = overview.stages[idx - 1], next = overview.stages[idx + 1];
     main.innerHTML = `<div class="page">
-      <div class="crumbs"><a href="#/">Dashboard</a> › Stage ${idx + 1}</div>
+      <div class="crumbs"><a href="#/">Dashboard</a> › Module ${overview.stages[idx].order}</div>
       <h1 class="stagetitle"><span class="si">${STAGE_ICON[sid]}</span>${esc(s.title)}</h1>
       <p class="lead">${esc(s.summary)}</p>
       <div class="subtabs">
@@ -308,7 +316,7 @@
           </div>
           <div id="solution"></div>
           <div class="datahint muted small">Your code runs in your workspace folder, so paths like <code>data/customers.csv</code> work.
-            ${ex.lang === "sql" ? "Every CSV is also a view: <code>customers</code>, <code>customers_raw</code>, <code>orders</code>, <code>rentals_raw</code>, <code>products</code>." : ""}</div>
+            ${ex.lang === "sql" ? "Every CSV is also a view: <code>customers</code>, <code>customers_raw</code>, <code>orders</code>, <code>store_sales</code>, <code>rentals_raw</code>, <code>products</code>." : ""}</div>
         </section>
         <section class="codepane">
           <div class="toolbar">
@@ -327,12 +335,12 @@
     $("#task").appendChild(md(ex.task));
     const saveCode = debounce(async (code) => {
       await api("/api/save", { exercise: id, code }).catch(() => {});
-      $("#saved").textContent = "saved";
+      const sv = $("#saved"); if (sv) sv.textContent = "saved";
     }, 1200);
     const ed = Editor.create($("#editor"), {
       value: ex.saved_code != null ? ex.saved_code : ex.starter, lang: ex.lang,
       onRun: () => run(false), onCheck: () => run(true),
-      onChange: (v) => { $("#saved").textContent = "…"; saveCode(v); },
+      onChange: (v) => { const sv = $("#saved"); if (sv) sv.textContent = "…"; saveCode(v); },
     });
     ed.focus();
     let busy = false;
@@ -460,11 +468,12 @@
   // ------------------------------------------------------------------ datasets
   const DATA_INFO = {
     "customers_raw.csv": "CRM export, deliberately messy: duplicates, mixed case, '$52,000' incomes, impossible ages, two date formats.",
-    "customers.csv": "The cleaned customer table (answer key for the Clean stage). Used from the EDA stage on.",
+    "customers.csv": "The cleaned customer table (answer key for Module 2, Clean). Used from Module 3 (EDA) on.",
     "orders.csv": "4,000 orders 2021–2024: date, category, quantity, unit price, discount.",
     "products.json": "Product categories with department and margin.",
     "ridgeway.db": "SQLite database with the stores and revenue-target tables.",
     "rentals_raw.csv": "Daily bike rentals 2023–2024 for the capstone project (messy).",
+    "store_sales.csv": "Weekly Ridgeway sales 2021–2024 with promotion weeks, used in Module 7 (Forecast).",
   };
   async function datasets(name) {
     const list = await api("/api/datasets");

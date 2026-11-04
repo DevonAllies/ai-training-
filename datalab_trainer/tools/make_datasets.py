@@ -212,6 +212,19 @@ def make_rentals() -> pd.DataFrame:
     return pd.concat([df, dups]).sort_values("date", kind="stable").reset_index(drop=True)
 
 
+def make_store_sales() -> pd.DataFrame:
+    """Weekly sales 2021-2024 for the forecasting module: trend + yearly season + noise."""
+    r = np.random.default_rng(2024)  # own generator so other files don't change
+    weeks = pd.date_range("2021-01-04", "2024-12-30", freq="W-MON")
+    t = np.arange(len(weeks))
+    woy = weeks.isocalendar().week.values.astype(float)
+    season = 9000 * np.cos(2 * np.pi * (woy - 51) / 52)        # December peak
+    promo = (r.random(len(weeks)) < 0.08).astype(int)
+    sales = 42000 + 140 * t + season + 6500 * promo + r.normal(0, 2500, len(weeks))
+    return pd.DataFrame({"week": weeks.strftime("%Y-%m-%d"), "sales": sales.round(0).astype(int),
+                         "promo": promo})
+
+
 def main() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
     raw = make_customers()
@@ -223,6 +236,7 @@ def main() -> None:
     (DATA / "products.json").write_text(json.dumps(CATEGORIES, indent=2) + "\n", encoding="utf-8")
     make_db(DATA / "ridgeway.db")
     make_rentals().to_csv(DATA / "rentals_raw.csv", index=False)
+    make_store_sales().to_csv(DATA / "store_sales.csv", index=False)
     print(f"customers_raw {len(raw)} rows, customers {len(clean)} rows, orders {len(orders)} rows")
     print(f"churn rate {clean['churned'].mean():.3f}")
 
