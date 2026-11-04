@@ -259,6 +259,7 @@ def show(*args, **kwargs):
 _PY_DRIVER = r'''
 import json, linecache, os, sys, traceback
 _out = sys.argv[1]
+sys.path.insert(0, _out)  # for _datalab_mpl; PYTHONPATH is ignored by frozen (packaged) builds
 _result = {"user_ok": False, "check": None}
 _ns = {"__name__": "__main__", "__builtins__": __builtins__}
 
@@ -341,8 +342,8 @@ def run_python(code: str, workspace: Path, check: str | None = None, python: str
             "PYTHONPATH": str(out) + os.pathsep + env.get("PYTHONPATH", ""),
             "PYTHONWARNINGS": "ignore::FutureWarning",
         })
-        exe = python or sys.executable
-        code_, so, se, timed_out = _run_proc([exe, str(out / "_driver.py"), str(out)], workspace, env, timeout)
+        cmd = python_command(python)
+        code_, so, se, timed_out = _run_proc(cmd + [str(out / "_driver.py"), str(out)], workspace, env, timeout)
         res.stdout, res.stderr = so, se
         if timed_out:
             res.ok = False
@@ -476,14 +477,28 @@ PY_PACKAGES = ["pandas", "numpy", "matplotlib", "scipy", "sklearn", "statsmodels
 R_PACKAGES = ["ggplot2", "dplyr", "tidyr", "readr", "readxl", "jsonlite", "DBI", "RSQLite", "rmarkdown"]
 
 
+def python_command(python: str | None = None) -> list[str]:
+    """How to start a Python interpreter for learner code.
+
+    In a packaged build (PyInstaller) sys.executable is DataLab itself, which
+    acts as a Python interpreter when started with --python (see __main__).
+    """
+    if python:
+        return [python]
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--python"]
+    return [sys.executable]
+
+
 def python_env(python: str | None = None) -> dict:
-    exe = python or sys.executable
+    cmd = python_command(python)
+    exe = python or ("built-in (packaged with DataLab)" if getattr(sys, "frozen", False) else sys.executable)
     probe = ("import importlib, json, sys\nout={'version': sys.version.split()[0], 'packages': {}}\n"
              f"for m in {PY_PACKAGES!r}:\n"
              "    try:\n        mod=importlib.import_module(m); out['packages'][m]=getattr(mod,'__version__','yes')\n"
              "    except Exception:\n        out['packages'][m]=None\nprint(json.dumps(out))\n")
     try:
-        p = subprocess.run([exe, "-c", probe], capture_output=True, timeout=90, **_subprocess_flags())
+        p = subprocess.run(cmd + ["-c", probe], capture_output=True, timeout=90, **_subprocess_flags())
         import json
         info = json.loads(_decode(p.stdout).strip().splitlines()[-1])
         info["path"] = exe

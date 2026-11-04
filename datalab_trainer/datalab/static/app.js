@@ -883,7 +883,8 @@ Rscript setup_r_packages.R   # optional R packages`,
           <p>DuckDB ${esc(env.sql.duckdb || "not installed")}: built in, nothing else to install.</p></section>
         <section class="card"><h2>Python <span class="pill ${py.version && !missingPy.filter(m => m !== "shap").length ? "ok" : "warn"}">${py.version ? esc(py.version) : "not found"}</span></h2>
           <p class="small muted">${esc(py.path || "")}</p><div class="pkgs">${pk(py.packages)}</div>
-          ${missingPy.length ? `<p class="small">Install missing packages:</p><pre class="out">"${esc(py.path || "python")}" -m pip install ${esc(missingPy.join(" "))}</pre>` : ""}
+          ${(py.path || "").startsWith("built-in") ? `<p class="small muted">Python and all course libraries are bundled with this app. To use extra packages, install Python yourself and enter its path under Settings.</p>`
+            : missingPy.length ? `<p class="small">Install missing packages:</p><pre class="out">"${esc(py.path || "python")}" -m pip install ${esc(missingPy.join(" "))}</pre>` : ""}
           ${py.error ? `<pre class="err">${esc(py.error)}</pre>` : ""}</section>
         <section class="card"><h2>R <span class="pill ${r.version ? "ok" : "warn"}">${r.version ? esc(r.version) : "not found"}</span></h2>
           ${r.path ? `<p class="small muted">${esc(r.path)}</p><div class="pkgs">${pk(r.packages)}</div>
@@ -892,7 +893,7 @@ Rscript setup_r_packages.R   # optional R packages`,
       </div>
       <section class="card"><h2>Settings</h2>
         <form id="settings" class="settings">
-          <label>Python interpreter <span class="muted small">(empty = the Python running DataLab)</span><input name="python_path" value="${esc(settings.python_path || "")}" placeholder="${esc(py.path || "")}"></label>
+          <label>Python interpreter <span class="muted small">(empty = the Python running DataLab)</span><input name="python_path" value="${esc(settings.python_path || "")}" placeholder="${esc((py.path || "").startsWith("built-in") ? "built-in" : (py.path || ""))}"></label>
           <label>Rscript path <span class="muted small">(empty = find automatically)</span><input name="rscript_path" value="${esc(settings.rscript_path || "")}" placeholder="${navigator.platform.startsWith("Win") ? "C:\\Program Files\\R\\R-4.4.1\\bin\\Rscript.exe" : "/usr/bin/Rscript"}"></label>
           <label>Time limit per run (seconds)<input name="timeout" type="number" min="10" max="1800" value="${esc(String(settings.timeout || 120))}"></label>
           <div class="actions"><button class="btn primary">Save &amp; re-check</button><button type="button" class="btn ghost" id="recheck">Re-check environment</button></div>

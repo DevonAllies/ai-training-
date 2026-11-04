@@ -49,7 +49,29 @@ your browser as the interface. It works offline.
 
 ## Install
 
-### Windows 10 / 11
+### Option A – download the ready-made app (recommended)
+
+The app comes with Python and every library built in, so there's nothing else to install
+(except R, if you want the R exercises). Download it from the repository's **Releases** page
+(releases named *DataLab Trainer x.y.z*):
+
+| System | File | Install |
+|---|---|---|
+| **Windows 10 / 11** | `DataLabTrainer-Setup-x.y.z.exe` | Run it (no admin rights needed), then start **DataLab Trainer** from the Start menu. |
+| Windows without installing | `DataLabTrainer-x.y.z-windows-portable.zip` | Unzip anywhere, run `DataLabTrainer.exe`. |
+| **Ubuntu / Debian** | `datalab-trainer_x.y.z_amd64.deb` | `sudo apt install ./datalab-trainer_x.y.z_amd64.deb` (this also installs R), then open **DataLab Trainer** from the app menu or run `datalab-trainer`. |
+| Other Linux (x86-64) | `DataLabTrainer-x.y.z-linux-x86_64.tar.gz` | `tar xzf …`, then `./DataLabTrainer/DataLabTrainer`. Run `./install-desktop-entry.sh` in that folder for a menu entry. |
+
+A small window opens showing the address, and your browser opens DataLab. Close that window
+(or press Ctrl+C) to stop it. Windows SmartScreen may warn about an unsigned installer: click
+**More info → Run anyway**. For the R exercises on Windows, install R from
+<https://cran.r-project.org/bin/windows/base/>. The installer offers to open that page if R is missing.
+
+Every build is tested on Windows and Linux before release: CI runs every exercise's model solution through the packaged app.
+
+### Option B – run from source
+
+#### Windows 10 / 11
 
 1. Install **Python 3.10 or newer** from <https://www.python.org/downloads/>. Tick **"Add python.exe to PATH"** in the installer.
 2. *(For the R exercises)* install **R** from <https://cran.r-project.org/bin/windows/base/> with the default options.
@@ -57,7 +79,7 @@ your browser as the interface. It works offline.
 3. Double-click **`install.bat`** in this folder (once). It creates a private `.venv` and installs the Python packages.
 4. Double-click **`run.bat`**. Your browser opens DataLab. Close the black window to stop it.
 
-### Ubuntu (22.04 / 24.04) and other Linux
+#### Ubuntu (22.04 / 24.04) and other Linux
 
 ```bash
 sudo apt update
@@ -86,6 +108,18 @@ run.bat --port 9000         ./run.sh --port 9000      # different port
 run.bat --no-browser        ./run.sh --no-browser     # don't open the browser
 ```
 
+### Building the app yourself
+
+| | |
+|---|---|
+| Windows | `build_app.bat` → `dist\DataLabTrainer\DataLabTrainer.exe`, plus `dist\DataLabTrainer-Setup-x.y.z.exe` if [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed |
+| Linux | `./build_app.sh` → `dist/DataLabTrainer/`, `dist/datalab-trainer_x.y.z_amd64.deb` and a `.tar.gz` |
+
+Check a build with `python packaging/smoke_test.py dist/DataLabTrainer/DataLabTrainer`, which runs every
+exercise solution through the packaged app. To publish a release, use **Actions → DataLab Trainer → Run
+workflow** and tick *release* (or push a `datalab-v<version>` tag). GitHub Actions then builds, tests and
+uploads all four downloads. DataLab releases are never marked "latest", so SimCoach's auto-updater isn't affected.
+
 ## Where your work is kept
 
 | | Windows | Linux |
@@ -101,7 +135,7 @@ Set the `DATALAB_HOME` environment variable to keep everything somewhere else, e
 
 * **SQL** runs on an embedded **DuckDB** database. Every CSV in `data/` is available as a view
   named after the file (`customers`, `customers_raw`, `orders`, `rentals_raw`, plus `products`).
-* **Python** runs in a separate process (the `.venv` interpreter by default), so an error
+* **Python** runs in a separate process (the Python bundled with the app, or `.venv` when run from source), so an error
   or endless loop can't crash the app. `plt.show()` charts are captured.
 * **R** runs through `Rscript`. Base graphics and ggplot charts (`print(p)`) are captured.
 * Each run has a time limit (120 s by default, adjustable on the Setup page).
