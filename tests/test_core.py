@@ -340,6 +340,11 @@ def test_no_memory_growth_over_long_session():
     eng.traffic.laps = _c.deque(maxlen=5)
     eng.game.feed = _c.deque(maxlen=5)
     eng._clean_times = _c.deque(maxlen=1)           # 8 KB per clean lap; fills slowly when laps have traffic
+    from simcoach.coach import FocusDrill
+    max_results = FocusDrill.MAX_RESULTS
+    FocusDrill.MAX_RESULTS = 3                      # drill attempts: one or two per lap until the cap (class:
+                                                    # the drill object is recreated when the reference changes)
+    eng.coach.voice.RECENT_MAX = 8                  # voice de-dup map: grows with every new phrase until the cap
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
@@ -351,7 +356,7 @@ def test_no_memory_growth_over_long_session():
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
 
-    run(6)                                  # warm-up: fill the (shrunken) caps, numpy pools
+    run(10)                                 # warm-up: fill the (shrunken) caps, numpy pools, dict shapes
     gc.collect()
     tracemalloc.start()
     def to_lap_end():                       # measure at the same point of a lap each time
@@ -368,11 +373,14 @@ def test_no_memory_growth_over_long_session():
         samples.append(tracemalloc.get_traced_memory()[0])
     tracemalloc.stop()
     spread = max(samples) - min(samples)
+    print("memory per lap (KiB):", [round(x / 1024) for x in samples])
     # Bounded: memory may differ by one retained lap (~105 KB: "last lap" and "session best" are
     # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
     assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
     assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
     assert len(eng.traffic._hist) <= 120 and len(eng._clean_times) <= 5 and len(eng.traffic._last_ev) <= 128
+    assert len(eng.coach.focus.results) <= 3 and len(eng.coach.voice._recent) <= 8 + 20
+    FocusDrill.MAX_RESULTS = max_results
 
 
 # ------------------------------------------------------------------ v4: auto-update

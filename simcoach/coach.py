@@ -26,6 +26,7 @@ MAX_LAPS = 100
 
 
 class FocusDrill:
+    MAX_RESULTS = 20                   # last drill attempts kept (bounded)
     def __init__(self, target: float = 0.05, needed: int = 3):
         self.active = False
         self.auto = True
@@ -170,7 +171,7 @@ class SessionCoach:
         res = drills.evaluate(f.kind, rep, f.state, f.target)
         f.results.append({"attempt": f.attempts, "ok": res["ok"], "text": res["text"],
                           "time_lost": round(rep["time_lost"], 3)})
-        del f.results[:-20]
+        del f.results[:-f.MAX_RESULTS]
         f.streak = f.streak + 1 if res["ok"] else 0
         self._emit("drill_attempt", ok=bool(res["ok"]), corner=title, kind=f.kind)
         done = res["done"] or f.streak >= f.needed
