@@ -3,3 +3,5 @@
 *.xlsx binary
 *.ico binary
 *.png binary
+*.sh text eol=lf
+*.db binary

@@ -1,0 +1,57 @@
+name: DataLab Trainer
+
+on:
+  push:
+    paths: ["datalab_trainer/**", ".github/workflows/datalab.yml"]
+  pull_request:
+    paths: ["datalab_trainer/**", ".github/workflows/datalab.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: datalab_trainer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+
+      - name: Install with install.sh (Ubuntu)
+        if: runner.os == 'Linux'
+        run: ./install.sh
+      - name: Install with install.bat (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: install.bat < NUL
+
+      - name: Run tests (every exercise solution in SQL, Python and R)
+        shell: bash
+        run: |
+          if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=.venv/Scripts/python.exe; fi
+          "$PY" -m pip install pytest
+          Rscript --version
+          "$PY" -m pytest -q tests -rs
+
+      - name: Start the server and fetch the dashboard
+        shell: bash
+        run: |
+          if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=.venv/Scripts/python.exe; fi
+          export DATALAB_HOME="$RUNNER_TEMP/datalab-home"
+          "$PY" -m datalab --no-browser --port 8070 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8070/api/overview >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8070/ | grep -q "DataLab"
+          curl -sf "http://127.0.0.1:8070/api/env" | "$PY" -c "import json,sys; e=json.load(sys.stdin); print(e['python']['version'], e['r'].get('version'), e['sql']); assert e['r'].get('version')"

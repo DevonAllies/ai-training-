@@ -1,0 +1,38 @@
+[
+  {
+    "category": "Electronics",
+    "department": "Tech",
+    "margin": 0.18,
+    "avg_price": 240
+  },
+  {
+    "category": "Books",
+    "department": "Media",
+    "margin": 0.32,
+    "avg_price": 22
+  },
+  {
+    "category": "Garden",
+    "department": "Home",
+    "margin": 0.27,
+    "avg_price": 55
+  },
+  {
+    "category": "Kitchen",
+    "department": "Home",
+    "margin": 0.3,
+    "avg_price": 48
+  },
+  {
+    "category": "Sports",
+    "department": "Leisure",
+    "margin": 0.25,
+    "avg_price": 70
+  },
+  {
+    "category": "Toys",
+    "department": "Leisure",
+    "margin": 0.35,
+    "avg_price": 30
+  }
+]

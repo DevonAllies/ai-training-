@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataLab Trainer</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fdf'/%3E%3Crect x='7' y='17' width='4' height='8' fill='white'/%3E%3Crect x='14' y='11' width='4' height='14' fill='white'/%3E%3Crect x='21' y='7' width='4' height='18' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+<div id="layout">
+  <nav id="side">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="7" fill="var(--accent)"/><rect x="7" y="17" width="4" height="8" fill="#fff"/><rect x="14" y="11" width="4" height="14" fill="#fff"/><rect x="21" y="7" width="4" height="18" fill="#fff"/></svg>
+      <span>DataLab <small>Trainer</small></span>
+    </a>
+    <button id="menuToggle" aria-label="Menu">☰</button>
+    <div id="navItems">
+      <a href="#/" data-nav="home">Dashboard</a>
+      <div class="navlabel">Pipeline</div>
+      <div id="navStages"></div>
+      <div class="navlabel">Practice</div>
+      <a href="#/project" data-nav="project">Capstone project</a>
+      <a href="#/playground" data-nav="playground">Playground</a>
+      <a href="#/data" data-nav="data">Datasets</a>
+      <a href="#/report" data-nav="report">Report Builder</a>
+      <div class="navlabel">App</div>
+      <a href="#/setup" data-nav="setup">Setup &amp; environment</a>
+    </div>
+  </nav>
+  <main id="main"><div class="loading">Loading…</div></main>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/static/markdown.js"></script>
+<script src="/static/editor.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

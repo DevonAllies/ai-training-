@@ -1,5 +1,7 @@
 # SimCoach – iRacing training with Garage 61
 
+> **Also in this repository:** [DataLab Trainer](datalab_trainer/README.md), a hands-on training app for data analysis and data science in SQL, Python and R (import → clean → EDA → modelling → SHAP → report writing) that runs natively on Windows and Ubuntu.
+
 SimCoach is a local app for the PC that runs iRacing. It:
 
 - **Reads live iRacing telemetry** at 60 Hz and shows a **live delta** against a reference lap. It also shows whether you're losing or gaining time right now, your predicted lap time, and speed and pedal inputs compared with the reference.
