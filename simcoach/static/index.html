@@ -6,6 +6,7 @@
 <title>SimCoach</title>
 <link rel="icon" href="/static/icon.png">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/game.css">
 </head>
 <body>
 <header>
@@ -323,6 +324,18 @@
 
 <!-- ============================ PROGRESS ============================ -->
 <section id="tab-progress" class="tab-page">
+  <div class="card" data-feature="game">
+    <div class="label">Training game <span class="muted">· XP for drills, quests, consistency and fuel laps</span></div>
+    <div id="game-out"><span class="muted">Loading…</span></div>
+    <div class="filters" style="margin-top:12px">
+      <span class="muted small-text">Widgets (phone / tablet / second screen / OBS):</span>
+      <a href="/widget/plan" target="_blank"><button class="small">🏁 Quest</button></a>
+      <a href="/widget/consistency" target="_blank"><button class="small">🎯 Consistency</button></a>
+      <a href="/widget/endurance" target="_blank"><button class="small">⏱ Endurance</button></a>
+      <a href="/widget/fuel" target="_blank"><button class="small">⛽ Fuel</button></a>
+      <a href="/train" target="_blank"><button class="small primary">Training hub</button></a>
+    </div>
+  </div>
   <div class="card" data-feature="goals">
     <div class="label">Weekly training goal</div>
     <div class="analyze-grid">
@@ -451,6 +464,8 @@
       <div id="lan-restart" class="msg hidden">Restart SimCoach to apply. <button id="btn-restart" class="small primary">Restart now</button></div>
       <div id="lan-ready" class="hidden">
         <p>Scan with your tablet/phone camera, or type the address:</p>
+        <label>Open on the phone <select id="lan-target" class="small"><option value="train">Training hub (pick training, widgets)</option>
+          <option value="">Full dashboard</option></select></label>
         <div class="lan-qr"><img id="lan-qr" alt="QR code"></div>
         <select id="lan-url" class="small"></select>
         <p class="muted small-text">Windows may ask once whether to allow SimCoach on networks – allow it for <b>private</b>
@@ -471,6 +486,7 @@
 </section>
 
 <script src="/static/charts.js"></script>
+<script src="/static/game.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -73,6 +73,11 @@ class SessionCoach:
         self._cued: set[int] = set()
         self.voice_mode = "cues"                    # off | cues | detailed
         self.voice_allowed = True                   # e.g. only in practice sessions
+        self.listener = None                        # callback(event, **data) - the training game
+
+    def _emit(self, event: str, **data) -> None:
+        if self.listener:
+            self.listener(event, **data)
 
     # ------------------------------------------------------------- lifecycle
     def reset(self) -> None:
@@ -167,12 +172,14 @@ class SessionCoach:
                           "time_lost": round(rep["time_lost"], 3)})
         del f.results[:-20]
         f.streak = f.streak + 1 if res["ok"] else 0
+        self._emit("drill_attempt", ok=bool(res["ok"]), corner=title, kind=f.kind)
         done = res["done"] or f.streak >= f.needed
         drill_name = drills.DRILLS.get(f.kind, drills.DRILLS["time"])["title"]
         if done:
             f.completed.append(rep["name"])
             f.message = f"{title}: {drill_name} done! {res['text']}"
             self._say(f"{name}, drill complete. Nice work.", important=True)
+            self._emit("drill_done", corner=title, kind=f.kind)
             self._plan_step_done(idx, f.kind)
             if f.auto:
                 self._pick_focus(exclude=set(f.completed))
@@ -259,13 +266,24 @@ class SessionCoach:
 
     def mark_plan_step(self, i: int, status: str = "done") -> None:
         if 0 <= i < len(self.plan) and status in ("pending", "active", "done", "skipped"):
-            self.plan[i]["status"] = status
+            if status == "done":
+                self.finish_step(self.plan[i])
+            else:
+                self.plan[i]["status"] = status
+
+    def finish_step(self, step: dict) -> None:
+        """Mark a plan step done (once) and tell the game."""
+        if step["status"] == "done":
+            return
+        step["status"] = "done"
+        all_done = all(p["status"] in ("done", "skipped") for p in self.plan)
+        self._emit("plan_step", title=step.get("title", ""), all_done=all_done)
 
     def _plan_step_done(self, corner: int, kind: str) -> None:
         for p in self.plan:
             d = p.get("drill")
             if p["status"] == "active" and d and d["corner"] == corner:
-                p["status"] = "done"
+                self.finish_step(p)
                 nxt = next((q for q in self.plan if q["status"] == "pending"), None)
                 if nxt:
                     self._say(f"Next: {nxt['title']}", important=True)

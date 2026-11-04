@@ -30,6 +30,7 @@ from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corne
 from . import history
 from .coach import SessionCoach
 from .consistency import ConsistencyTrainer
+from .game import TrainingGame
 from .race import RaceTracker, extra_lap_target, lift_plan
 from .config import Config, laps_dir
 from .corners import apply_names
@@ -444,6 +445,10 @@ class LiveEngine:
         self.history_laps: collections.deque[dict] = collections.deque(maxlen=history.MAX_LAPS)
         self.coach = SessionCoach(VoiceCoach(native=config.voice_native))
         self.coach.focus.target = config.focus_target
+        self.game = TrainingGame()
+        self.game.say = lambda text: self.coach._say(text, important=True)
+        self.coach.listener = self._game_event
+        self._beat_ref = ""                        # reference label already beaten (XP once per reference)
         self.status_msg = "Waiting for iRacing…"
         self._next_corner = 0
 
@@ -561,6 +566,7 @@ class LiveEngine:
                     self.history_id = None
                     self.history_laps.clear()
                     self.drive_s = 0.0
+                    self.game.new_session()
                     if self.ref_corners:
                         apply_names(self.ref_corners, self.track_name())
                     if self.on_session_change:
@@ -830,6 +836,13 @@ class LiveEngine:
                            self.last_comparison if self.reference is not None else None)
 
         if buf.valid:
+            self._game_event("clean_lap")
+            if self.reference is not None and not self.ref_is_session_best and \
+                    lap_time < self.reference.lap_time and self._beat_ref != self.ref_label:
+                self._beat_ref = self.ref_label
+                self._game_event("beat_reference")
+            if self.session_best is not None and lap_time < self.session_best.lap_time:
+                self._game_event("session_best")
             if self.session_best is None or lap_time < self.session_best.lap_time:
                 self.session_best = lap
                 if self.reference is None or self.ref_is_session_best:
@@ -843,12 +856,60 @@ class LiveEngine:
             phrase = self.consistency.spoken(res) if res else None
             if phrase:
                 self.coach._say(phrase, important=True)
+            if res and res.get("inside") is not None:
+                self._game_event("cons_lap", inside=bool(res["inside"]), streak=res.get("streak"))
             if res and res.get("completed") and res.get("streak") == self.consistency.goal:
+                self._game_event("cons_goal")
                 for p in self.coach.plan:              # tick off the plan's consistency run
                     if p.get("consistency") and p["status"] == "active":
-                        p["status"] = "done"
+                        self.coach.finish_step(p)
             info["consistency"] = None if not res else {"inside": res.get("inside"), "delta": res.get("delta")}
+        if self.fuel_save and fuel_used and self.config.on("endurance"):
+            goal = self.fuel_target_per_lap()
+            if goal:
+                ok = buf.valid and fuel_used <= goal + 0.02
+                info["fuel_ok"] = ok
+                self._game_event("fuel_lap", ok=ok)
         self._record_history(info, lap)
+        self.game.save()
+
+    def _game_event(self, event: str, **data) -> None:
+        if self.config.on("game"):
+            self.game.on(event, **data)
+
+    def fuel_target_per_lap(self) -> float | None:
+        """Fuel per lap to hit in fuel-save mode (litres)."""
+        fs = self.fuel_save or {}
+        if (fs.get("extra_lap") or {}).get("target_fuel_per_lap"):
+            return fs["extra_lap"]["target_fuel_per_lap"]
+        fpl = fs.get("fuel_per_lap")
+        if fpl and fs.get("target_l"):
+            return round(fpl - fs["target_l"], 3)
+        return None
+
+    # -------------------------------------------------------------- training
+    def training_mode(self) -> str:
+        """What you're training right now: free, plan, drill, consistency or fuel."""
+        if any(p.get("status") == "active" for p in self.coach.plan):
+            return "plan"
+        if self.fuel_save:
+            return "fuel"
+        if self.consistency.active:
+            return "consistency"
+        if self.coach.focus.active:
+            return "drill"
+        return "free"
+
+    def stop_training(self, keep_plan: bool = False, keep_fuel: bool = False) -> None:
+        with self.lock:
+            self.coach.stop_focus()
+            self.consistency.stop()
+            if not keep_fuel:
+                self.fuel_save = None
+            if not keep_plan:
+                for p in self.coach.plan:
+                    if p["status"] == "active":
+                        p["status"] = "pending"
 
     def _record_history(self, info: dict, lap: Lap) -> None:
         if not self.config.record_history:
@@ -880,6 +941,7 @@ class LiveEngine:
         g = self.weekly_goal()
         if g["met"]:
             self._goal_announced = True
+            self._game_event("weekly_goal")
             streak = g["streak"]
             self.coach._say(f"Weekly goal reached. {streak} week streak" if streak > 1 else "Weekly goal reached",
                             important=True)
@@ -1040,6 +1102,7 @@ class LiveEngine:
             "consistency": self.consistency.status() if (self.config.on("consistency")
                                                          and self.consistency.active) else None,
             "features": dict(self.config.features),
+            "game": self.game.overlay() if self.config.on("game") else None,
             "voice": self.coach.voice.recent(5),
             "voice_mode": self.config.voice_mode,
         }

@@ -44,6 +44,7 @@ FEATURES = {
     "endurance": "Race, endurance & fuel saving",
     "practice": "Progress & practice plan",
     "goals": "Weekly training goal & streak",
+    "game": "Training game (XP, levels, combos, daily challenge, badges)",
 }
 
 

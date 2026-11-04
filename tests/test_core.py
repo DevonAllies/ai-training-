@@ -986,3 +986,103 @@ def test_weekly_goal_live_and_api():
     assert client.post("/api/config", json={"goal_type": "laps", "goal_value": 50}).json()["goal_type"] == "laps"
     client.post("/api/config", json={"features": {"goals": False}})
     assert client.get("/api/goals").status_code == 409
+
+
+# ------------------------------------------------- v12: training game, phone training hub, widgets
+def test_training_game_xp_combo_daily_badges(tmp_path):
+    import datetime as dt
+    from simcoach.game import XP, TrainingGame, combo_mult, daily_for, level_for
+    day = dt.date(2026, 11, 4)
+    assert level_for(0)["level"] == 1 and level_for(100)["level"] == 2 and level_for(274)["level"] == 2
+    assert level_for(275)["level"] == 3
+    assert [combo_mult(n) for n in (0, 2, 3, 6, 10)] == [1, 1, 2, 3, 4]
+    g = TrainingGame(path=tmp_path / "game.json", today=lambda: day)
+    said = []
+    g.say = said.append
+    g.on("clean_lap")
+    assert g.xp == XP["clean_lap"] and g.status()["badges"][0]["earned"]
+    for _ in range(3):                                    # combo: x2 on the third hit
+        g.on("drill_attempt", ok=True, corner="T1")
+    assert g.combo == 3 and g.xp == XP["clean_lap"] + XP["drill_hit"] * (1 + 1 + 2)
+    g.on("drill_attempt", ok=False)
+    assert g.combo == 0 and g.best_combo == 3
+    g.on("drill_done", corner="T1", kind="brake_ladder")
+    assert {"first_drill", "ladder"} <= set(g.badges)
+    g.on("plan_step", title="Warm-up", all_done=False)
+    g.on("plan_step", title="Push laps", all_done=True)
+    assert "plan" in g.badges and any("Level up" in s for s in said)
+    # weekly goal XP only once per ISO week
+    xp = g.xp
+    g.on("weekly_goal"); g.on("weekly_goal")
+    assert g.xp == xp + XP["weekly_goal"]
+    # daily challenge
+    d = daily_for(day)
+    before = g.xp
+    for _ in range(d["goal"]):
+        if d["event"] == "combo":
+            g.on("drill_attempt", ok=True)
+        elif d["event"] in ("cons_lap",):
+            g.on("cons_lap", inside=True, streak=1)
+        elif d["event"] == "fuel_lap":
+            g.on("fuel_lap", ok=True)
+        elif d["event"] == "drill_hit":
+            g.on("drill_attempt", ok=True)
+        else:
+            g.on(d["event"])
+    st = g.status()
+    assert st["daily"]["done"] and g.xp - before >= XP["daily"]
+    # feed is bounded, state persists
+    for _ in range(100):
+        g.on("cons_lap", inside=False)
+    assert len(g.feed) <= 25 and g.combo == 0
+    g.save()
+    g2 = TrainingGame(path=tmp_path / "game.json", today=lambda: day)
+    assert g2.xp == g.xp and g2.badges == g.badges and g2.daily_done and g2.combo == 0
+    assert g2.overlay()["level"] == level_for(g.xp)["level"]
+
+
+def test_training_hub_select_from_phone_and_widgets():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    app = create_app(eng, cfg, demo_mode=True, bind_host="0.0.0.0", port=8061)
+    phone = TestClient(app, client=("192.168.1.50", 5000))
+    xp0 = eng.game.xp
+    _drive(eng, 3.6)
+    assert eng.game.xp > xp0                                           # clean laps earn XP
+    st = phone.get("/api/training").json()
+    assert st["mode"] == "free" and st["corners"] and st["game"]["level"] >= 1 and "game" in st["feature_labels"]
+    # pages
+    for path in ("/train", "/widget/plan", "/widget/consistency", "/widget/endurance", "/widget/fuel"):
+        assert phone.get(path).status_code == 200
+    assert phone.get("/widget/nope").status_code == 404
+    # drill from the phone
+    st = phone.post("/api/training/select", json={"mode": "drill", "corner": 1, "kind": "min_speed"}).json()
+    assert st["mode"] == "drill" and st["focus"]["corner"] == 1 and st["focus"]["kind"] == "min_speed"
+    # consistency replaces the drill
+    st = phone.post("/api/training/select", json={"mode": "consistency", "window": 0.2, "goal": 10}).json()
+    assert st["mode"] == "consistency" and not st["focus"]["active"] and st["consistency"]["goal"] == 10
+    # plan: builds one and starts the first open quest
+    st = phone.post("/api/training/select", json={"mode": "plan", "minutes": 45}).json()
+    assert st["mode"] == "plan" and st["plan"][0]["status"] == "active" and not st["consistency"]["active"]
+    # fuel saving (demo has fuel) then back to free driving
+    r = phone.post("/api/training/select", json={"mode": "fuel", "fuel_mode": "target", "save_per_lap": 0.1})
+    assert r.status_code == 200 and r.json()["mode"] == "fuel" and r.json()["fuel_target"]
+    assert not any(p["status"] == "active" for p in r.json()["plan"])
+    w = phone.get("/api/widget").json()
+    assert w["race"] is not None and w["fuel_save"]
+    assert phone.post("/api/training/select", json={"mode": "free"}).json()["mode"] == "free"
+    assert eng.fuel_save is None
+    assert phone.post("/api/training/select", json={"mode": "nope"}).status_code == 422
+    # training features can be switched from the phone - other settings stay local-only
+    r = phone.post("/api/features", json={"features": {"consistency": False, "garage61_token": "x"}})
+    assert r.status_code == 200 and r.json()["features"]["consistency"] is False
+    assert "garage61_token" not in r.json()["features"]
+    assert phone.post("/api/training/select", json={"mode": "consistency"}).status_code == 409
+    assert phone.post("/api/config", json={"units": "imperial"}).status_code == 403
+    phone.post("/api/features", json={"features": {"consistency": True, "game": False}})
+    assert phone.get("/api/game").status_code == 409 and eng.overlay()["game"] is None
+    phone.post("/api/features", json={"features": {"game": True}})
+    assert eng.overlay()["game"]["level"] >= 1

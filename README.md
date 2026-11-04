@@ -190,9 +190,52 @@ At the top of the **Progress** tab you can set a weekly goal: **minutes on track
 
 Time on track is measured live (pit lane and pauses don't count).
 
+## Training hub on your phone
+
+Open **`/train`** on your phone (Settings → Tablet / phone; the QR code opens the training hub by default). From the phone you can:
+
+- **Pick what you train:** practice plan, corner drill (choose the corner and drill, or let the coach pick), consistency run (window and laps in a row), fuel saving (+1 lap or 0.1 L per lap), or free driving. Starting one stops the others.
+- **See what's running:** the active quest, drill streak, consistency streak or fuel laps on target.
+- **Switch training features on or off.** Other settings, quit, restart and delete stay limited to the PC.
+
+## Widgets
+
+Small single-purpose pages for a phone, tablet, second monitor or OBS browser source:
+
+| Widget | Shows |
+|---|---|
+| `/widget/plan` | The practice plan as a quest path, with XP, combo, daily challenge and badges |
+| `/widget/consistency` | Streak ring, target ± window, a dot per lap, score and spread |
+| `/widget/endurance` | Fuel, laps of fuel, laps to go, fuel to finish, stops, pit window, stint pace |
+| `/widget/fuel` | Fuel-save target per lap and which laps hit it |
+
+Add `?transparent=1` for OBS, or `?readonly=1` to hide the buttons.
+
+## Training game
+
+Training is repetitive on purpose, so SimCoach keeps score:
+
+- **XP:**
+  - clean lap: 10
+  - new session best: 25
+  - beating your reference: 60
+  - drill attempt on target: 6
+  - finished drill: 50
+  - finished practice-plan step ("quest"): 40
+  - finished whole plan ("boss"): +150
+  - lap inside the consistency window: 8
+  - fuel-save lap on target: 15
+  - weekly goal: 200
+- **Combo:** hits in a row multiply XP: x2 from 3, x3 from 6, x4 from 10. A miss resets it.
+- **Levels:** Rookie → Club Racer → … → Alien.
+- **Daily challenge:** one task a day, worth +75 XP.
+- **14 badges:** for example Late braker (finish a brake ladder), Robot (10 consistent laps in a row), Fuel whisperer.
+- **Where it shows:** the in-game browser overlay shows your level, combo and XP pops. The voice announces level-ups, badges and the daily challenge.
+- **Storage:** progress is kept in `game.json` in the SimCoach folder.
+
 ## Training features on/off
 
-**Settings → Training features** switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, and progress/practice plan. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
+**Settings → Training features** (or the phone's training hub) switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, progress/practice plan, weekly goal and the training game. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
 
 ## Session report and practice plan
 

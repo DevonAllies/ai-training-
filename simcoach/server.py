@@ -96,6 +96,22 @@ class FocusIn(BaseModel):
     kind: str | None = None            # drill type (drills.DRILLS); None = coach picks from the main issue
 
 
+class TrainingIn(BaseModel):
+    mode: str                          # "free" | "plan" | "drill" | "consistency" | "fuel"
+    step: int | None = None            # plan: which step (None = next one not done)
+    minutes: int = 45                  # plan: session length when a new plan is made
+    corner: int | None = None          # drill: corner index (None = coach picks)
+    kind: str | None = None            # drill: drill type
+    window: float | None = None        # consistency
+    goal: int | None = None
+    fuel_mode: str = "extra_lap"       # fuel: "extra_lap" | "target"
+    save_per_lap: float | None = None
+
+
+class FeaturesIn(BaseModel):
+    features: dict
+
+
 class TargetsIn(BaseModel):
     session_id: str | None = None      # imported session id; None = clear (use session best)
 
@@ -293,16 +309,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             config.goal_value = max(1.0, min(10000.0, float(body.goal_value)))
             engine._goal_announced = False
         if body.features is not None:
-            from .config import FEATURES
-            for k, v in body.features.items():
-                if k in FEATURES:
-                    config.features[k] = bool(v)
-            if not config.on("drills"):
-                engine.coach.stop_focus()
-            if not config.on("consistency"):
-                engine.consistency.stop()
-            if not config.on("endurance"):
-                engine.disable_fuel_save()
+            apply_features(body.features)
         if body.start_with_windows is not None:
             from . import autostart
             try:
@@ -507,6 +514,9 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     @app.get("/api/practice_plan")
     def practice_plan(track: str = "", car: str = "", minutes: int = 45):
         need("practice")
+        return make_plan(track, car, minutes)
+
+    def make_plan(track: str = "", car: str = "", minutes: int = 45) -> dict:
         from . import history
         with engine.lock:
             rep = engine.coach.report()
@@ -925,6 +935,122 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if not config.on(feature):
             from .config import FEATURES
             raise HTTPException(409, f"'{FEATURES[feature]}' is switched off in Settings → Training features.")
+
+    def apply_features(changes: dict) -> None:
+        from .config import FEATURES
+        with engine.lock:
+            for k, v in changes.items():
+                if k in FEATURES:
+                    config.features[k] = bool(v)
+            if not config.on("drills"):
+                engine.coach.stop_focus()
+            if not config.on("consistency"):
+                engine.consistency.stop()
+            if not config.on("endurance"):
+                engine.disable_fuel_save()
+
+    @app.post("/api/features")
+    def set_features(body: FeaturesIn):
+        """Training features on/off - allowed from the phone too (no other settings)."""
+        from .config import FEATURES
+        apply_features(body.features)
+        config.save()
+        return {"features": dict(config.features), "labels": FEATURES}
+
+    # -------------------------------------------------------------- training
+    def training_state() -> dict:
+        from . import drills
+        from .config import FEATURES
+        with engine.lock:
+            rep = engine.coach.report()
+            st = {
+                "mode": engine.training_mode(),
+                "features": dict(config.features),
+                "feature_labels": FEATURES,
+                "plan": engine.coach.plan,
+                "focus": engine.coach.focus.status(),
+                "consistency": engine.consistency.status(),
+                "fuel": engine._fuel_overlay(),
+                "fuel_save": bool(engine.fuel_save),
+                "fuel_target": engine.fuel_target_per_lap(),
+                "corners": [{"index": c["index"], "name": c["name"], "title": c["title"],
+                             "avg_loss": c["avg_loss"], "main_issue": c["main_issue"]} for c in rep["corners"]],
+                "drills": {k: d["title"] for k, d in drills.DRILLS.items()},
+                "connected": engine.connected, "on_track": bool((engine.last_sample or {}).get("on_track")),
+                "track": engine.track_name(), "car": engine.session.get("car", ""),
+                "lap": engine.lap_count, "units": config.units,
+                "last_laps": list(engine.laps_done)[-8:],
+            }
+        st["game"] = engine.game.status() if config.on("game") else None
+        return st
+
+    @app.get("/api/training")
+    def training():
+        return training_state()
+
+    @app.post("/api/training/select")
+    def training_select(body: TrainingIn):
+        """Switch what you're training (from the dashboard or the phone)."""
+        mode = body.mode
+        if mode not in ("free", "plan", "drill", "consistency", "fuel"):
+            raise HTTPException(422, "Unknown training mode")
+        need_map = {"plan": "practice", "drill": "drills", "consistency": "consistency", "fuel": "endurance"}
+        if mode in need_map:
+            need(need_map[mode])
+        if mode == "plan":
+            with engine.lock:
+                has_plan = bool(engine.coach.plan)
+            if not has_plan or (body.step is None and all(p["status"] in ("done", "skipped")
+                                                            for p in engine.coach.plan)):
+                made = make_plan(minutes=body.minutes)
+                if not made["plan"]:
+                    raise HTTPException(422, made.get("note") or "No plan yet - drive a few laps first.")
+            with engine.lock:
+                i = body.step
+                if i is None:
+                    i = next((k for k, p in enumerate(engine.coach.plan) if p["status"] not in ("done", "skipped")), 0)
+            engine.stop_training()
+            start_plan_step(i)
+        elif mode == "fuel":
+            fuel_save(FuelSaveIn(mode="target" if body.fuel_mode == "target" else "extra_lap",
+                                 save_per_lap=body.save_per_lap))      # raises if there's no plan yet
+            engine.stop_training(keep_fuel=True)
+        elif mode == "consistency":
+            engine.stop_training()
+            consistency_start(ConsistencyIn(window=body.window, goal=body.goal))
+        elif mode == "drill":
+            engine.stop_training()
+            coach_focus(FocusIn(action="corner" if body.corner is not None else "auto",
+                                corner=body.corner, kind=body.kind))
+        else:
+            engine.stop_training()
+        return training_state()
+
+    @app.get("/api/game")
+    def game_status():
+        need("game")
+        return engine.game.status()
+
+    @app.get("/api/widget")
+    def widget_state():
+        """Everything the small widgets need, in one poll."""
+        st = training_state()
+        st["race"] = engine.race_status() if config.on("endurance") else None
+        with engine.lock:
+            snap_s = engine.last_sample or {}
+            st["session_type"] = engine.session_type
+            st["time_left"] = snap_s.get("time_remain") if (snap_s.get("time_remain") or -1) > 0 else None
+        return st
+
+    @app.get("/train")
+    def train_page():
+        return FileResponse(STATIC / "train.html")
+
+    @app.get("/widget/{name}")
+    def widget_page(name: str):
+        if name not in ("consistency", "endurance", "fuel", "plan"):
+            raise HTTPException(404, "Widgets: consistency, endurance, fuel, plan")
+        return FileResponse(STATIC / "widget.html")
 
     @app.get("/api/goals")
     def weekly_goal():
