@@ -64,6 +64,42 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/f /im {#MyAppExe}"; Flags: runhidd
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+function AppRunning(): Boolean;
+var
+  rc: Integer;
+begin
+  { tasklist lists SimCoach.exe -> find succeeds (exit code 0) }
+  Result := Exec(ExpandConstant('{cmd}'),
+                 '/C tasklist /FI "IMAGENAME eq {#MyAppExe}" /NH | find /I "{#MyAppExe}" >NUL',
+                 '', SW_HIDE, ewWaitUntilTerminated, rc) and (rc = 0);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  i, rc: Integer;
+begin
+  { Auto-update: SimCoach starts this installer silently and then quits. Wait for it to
+    exit (up to 20 s) and stop it if it hangs, so no file is in use when files are replaced -
+    otherwise a silent install cancels on "file in use". Interactive installs keep Inno's
+    normal "close the application?" prompt. }
+  if WizardSilent then
+  begin
+    i := 0;
+    while AppRunning() and (i < 40) do
+    begin
+      Sleep(500);
+      i := i + 1;
+    end;
+    if AppRunning() then
+    begin
+      Log('SimCoach still running after 20 s - stopping it');
+      Exec(ExpandConstant('{sys}\taskkill.exe'), '/f /im {#MyAppExe}', '', SW_HIDE, ewWaitUntilTerminated, rc);
+      Sleep(1500);
+    end;
+  end;
+  Result := '';
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { also remove the Run value if the user enabled autostart from inside the app }

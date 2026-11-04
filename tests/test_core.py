@@ -477,7 +477,12 @@ def test_update_api_endpoints():
     cfg = Config()
     client = TestClient(create_app(LiveEngine(cfg, DemoSource()), cfg, updater=u))
     assert client.get("/api/update").json()["status"] == "idle"
-    assert client.post("/api/update/check").json()["status"] == "ready"
+    assert client.post("/api/update/check").json()["status"] in ("checking", "ready")   # runs in the background
+    for _ in range(100):
+        if client.get("/api/update").json()["status"] == "ready":
+            break
+        time.sleep(0.05)
+    assert client.get("/api/update").json()["status"] == "ready"
     assert client.post("/api/config", json={"update_mode": "off"}).json()["update_mode"] == "off"
 
 
@@ -1294,3 +1299,45 @@ def test_race_mode_turns_training_off_and_records_report(tmp_path, monkeypatch):
     # race mode off -> training back on in races
     client.post("/api/config", json={"race_mode": False})
     assert not eng.race_mode
+
+
+def test_updater_reports_failed_install_and_serialises_checks(tmp_path, monkeypatch):
+    import json as _json
+    import threading as _th
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from simcoach.updater import Updater, updates_dir
+    # an install of 0.8.0 was started, but we're still on 0.7.0 -> reported, with the installer log
+    (updates_dir() / "pending.json").write_text(_json.dumps({"from": "0.7.0", "to": "0.8.0"}))
+    (updates_dir() / "install.log").write_text("2026-11-04 09:00:00.000   Log opened.\n"
+                                               "2026-11-04 09:00:01.000   DeleteFile failed; code 5.\n")
+    u = Updater(Config(update_mode="auto"), "0.7.0")
+    st = u.status()
+    assert st["last_install_failed"] == "0.8.0" and "didn't install" in st["install_problem"]
+    assert "DeleteFile failed" in st["install_problem"] and not (updates_dir() / "pending.json").exists()
+    # the update did install -> no warning, marker cleared
+    (updates_dir() / "pending.json").write_text(_json.dumps({"from": "0.7.0", "to": "0.8.0"}))
+    u2 = Updater(Config(), "0.8.0")
+    assert u2.status()["install_problem"] is None and not (updates_dir() / "pending.json").exists()
+    # check button + background loop never run two checks/downloads at once
+    gate = _th.Event()
+    calls = []
+
+    def slow_check():
+        calls.append(1)
+        gate.wait(2)
+        u2._set(status="up_to_date")
+        return u2.status()
+    u2.check = slow_check
+    u2.check_now()
+    time.sleep(0.05)
+    assert u2.run_once()["status"] == "checking" and len(calls) == 1      # second one skipped
+    gate.set()
+
+
+def test_phone_cannot_install_updates():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config()
+    app = create_app(LiveEngine(cfg, DemoSource()), cfg, bind_host="0.0.0.0")
+    phone = TestClient(app, client=("192.168.1.50", 5000))
+    assert phone.post("/api/update/install").status_code == 403

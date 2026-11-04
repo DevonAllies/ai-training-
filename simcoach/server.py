@@ -926,10 +926,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def update_check():
         if updater is None:
             raise HTTPException(400, "Updater not running")
-        try:
-            return updater.run_once()
-        except Exception as exc:
-            raise HTTPException(502, f"Update check failed: {exc}") from exc
+        return updater.check_now()          # background; the page polls /api/update
 
     @app.post("/api/update/install")
     def update_install():

@@ -490,8 +490,10 @@
     <label class="block">Automatic updates
       <select id="s-update"><option value="auto">Install automatically when I'm not driving</option>
         <option value="notify">Download, then ask me</option><option value="off">Off</option></select></label>
-    <div id="update-status" class="muted"></div>
-    <div class="actions"><button id="btn-update-check" class="small">Check for updates now</button></div>
+    <div id="update-status" class="muted" style="white-space:pre-line"></div>
+    <div class="actions"><button id="btn-update-check" class="small">Check for updates now</button>
+      <button id="btn-update-install" class="small primary hidden">Install now</button>
+      <a href="https://github.com/DevonAllies/ai-training-/releases/latest" target="_blank"><button class="small">Download manually</button></a></div>
     <div class="actions"><button id="btn-save" class="primary">Save</button> <button id="btn-test">Test connection</button></div>
     <div id="s-msg" class="msg"></div>
   </div>

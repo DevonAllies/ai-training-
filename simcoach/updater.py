@@ -21,6 +21,7 @@ GitHub-hosted URLs; one background thread with fixed state (no growth).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -85,10 +86,41 @@ class Updater:
         self._thread: threading.Thread | None = None
         self.state = {"status": "idle", "current": current_version, "latest": None, "notes": "",
                       "release_url": None, "progress": 0.0, "error": None, "checked_at": None,
-                      "can_install": can_self_install(), "file": None}
+                      "can_install": can_self_install(), "file": None,
+                      "install_problem": None, "last_install_failed": None}
         self._asset: dict | None = None
         self._sha256: str | None = None
+        self._run_lock = threading.Lock()   # one check/download at a time (button + background)
+        self._check_last_install()
 
+    # ------------------------------------------- did the last install work?
+    def _pending_path(self) -> Path:
+        return updates_dir() / "pending.json"
+
+    def _check_last_install(self) -> None:
+        """An install was started earlier: if we're still on the old version it failed -
+        say so (with the installer's log) instead of silently trying the same thing again."""
+        p = self._pending_path()
+        try:
+            pend = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        to = str(pend.get("to") or "")
+        if to and is_newer(to, self.current):
+            tail = ""
+            try:
+                lines = (updates_dir() / "install.log").read_text(encoding="utf-8", errors="replace").splitlines()
+                tail = " | ".join(l.split(" ", 2)[-1] for l in lines[-4:] if l.strip())
+            except OSError:
+                pass
+            self.state["last_install_failed"] = to
+            self.state["install_problem"] = (f"The {to} update was started but didn't install - you're still on "
+                                   f"{self.current}. Click Install now to try again, or download it from the "
+                                   f"release page." + (f" Installer log: {tail}" if tail else ""))
+            log.warning("previous update to %s did not install: %s", to, tail)
+        else:
+            log.info("update to %s installed", to or self.current)
+        p.unlink(missing_ok=True)
     # -------------------------------------------------------------- state
     def _set(self, **kw):
         with self.lock:
@@ -137,9 +169,32 @@ class Updater:
     # -------------------------------------------------------------- steps
     def run_once(self) -> dict:
         """Check, and download if a newer version exists. Returns the status."""
-        self.check()
-        if self.state["status"] == "available" and self.config.update_mode in ("auto", "notify"):
-            self.download()
+        if not self._run_lock.acquire(blocking=False):     # already checking / downloading
+            return self.status()
+        try:
+            self.check()
+            if self.state["status"] == "available" and self.config.update_mode in ("auto", "notify"):
+                self.download()
+            return self.status()
+        finally:
+            self._run_lock.release()
+
+    def check_now(self) -> dict:
+        """'Check for updates now': runs in the background so the page stays responsive;
+        the dashboard polls the status (checking -> downloading % -> ready)."""
+        if self._run_lock.locked():
+            return self.status()
+        self._set(status="checking", error=None)
+
+        def work():
+            try:
+                self.run_once()
+                if self.state["status"] == "ready" and self.config.update_mode == "auto" and not self.is_busy():
+                    self.install()
+            except Exception as exc:
+                log.exception("update check failed")
+                self._set(status="error", error=str(exc))
+        threading.Thread(target=work, name="update-check", daemon=True).start()
         return self.status()
 
     def check(self) -> dict:
@@ -267,10 +322,22 @@ class Updater:
             Path(path).unlink(missing_ok=True)
             return self.status()
         log_file = updates_dir() / "install.log"
+        # The installer waits for this app to exit (and stops it if it hangs) before it
+        # replaces any files, then starts the new version.
         args = [path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
-                f"/LOG={log_file}"]
+                "/FORCECLOSEAPPLICATIONS", f"/LOG={log_file}"]
+        try:
+            self._pending_path().write_text(json.dumps({"from": self.current, "to": self.state["latest"],
+                                                         "at": time.time()}), encoding="utf-8")
+        except OSError:
+            pass
         flags = 0x00000008 | 0x00000200          # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(args, creationflags=flags, close_fds=True)
+        try:
+            subprocess.Popen(args, creationflags=flags, close_fds=True)
+        except OSError as exc:                   # e.g. blocked by antivirus
+            self._pending_path().unlink(missing_ok=True)
+            self._set(status="error", error=f"Couldn't start the installer: {exc}")
+            return self.status()
         self._set(status="installing")
         log.info("Installing update %s - SimCoach will restart", self.state["latest"])
         if self.on_quit:

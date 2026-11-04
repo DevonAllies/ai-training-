@@ -1126,7 +1126,8 @@ function describeUpdate(u) {
 let updateDismissed = null;
 async function refreshUpdate() {
   let u; try { u = await api("/api/update"); } catch { return; }
-  $("#update-status").textContent = describeUpdate(u);
+  $("#update-status").textContent = describeUpdate(u) + (u.install_problem ? "\n⚠ " + u.install_problem : "");
+  $("#btn-update-install").classList.toggle("hidden", !(u.status === "ready" && u.can_install));
   const show = (u.status === "ready" || u.status === "installing") && updateDismissed !== u.latest;
   $("#update-banner").classList.toggle("hidden", !show);
   if (show) {
@@ -1143,8 +1144,19 @@ $("#update-later").addEventListener("click", async () => {
 });
 $("#btn-update-check").addEventListener("click", async () => {
   $("#update-status").textContent = "Checking for updates…";
-  try { const u = await api("/api/update/check", { method: "POST" }); $("#update-status").textContent = describeUpdate(u); refreshUpdate(); }
-  catch (e) { $("#update-status").textContent = e.message; }
+  try { await api("/api/update/check", { method: "POST" }); }
+  catch (e) { $("#update-status").textContent = e.message; return; }
+  // the check + download run in the background: follow them until they settle
+  for (let i = 0; i < 300; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    await refreshUpdate();
+    const u = await api("/api/update").catch(() => null);
+    if (!u || !["checking", "downloading", "available"].includes(u.status)) break;
+  }
+});
+$("#btn-update-install").addEventListener("click", async () => {
+  $("#update-status").textContent = "Starting the installer – SimCoach will close and restart…";
+  try { await api("/api/update/install", { method: "POST" }); refreshUpdate(); } catch (e) { $("#update-status").textContent = e.message; }
 });
 setInterval(refreshUpdate, 30000);
 
