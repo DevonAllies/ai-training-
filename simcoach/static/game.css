@@ -66,5 +66,6 @@
 .g-dots { display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
 .g-dots i { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 700 9px Consolas, monospace; font-style: normal; color: #071009; }
 .g-dots i.in { background: var(--g-good); }
+.g-dots i.in.fast { background: var(--g-gold); }
 .g-dots i.out { background: var(--g-bad); color: #fff; }
 .g-dots i.na { background: #2a313b; color: var(--g-muted); }

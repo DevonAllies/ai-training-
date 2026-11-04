@@ -340,6 +340,11 @@ def test_no_memory_growth_over_long_session():
     eng.traffic.laps = _c.deque(maxlen=5)
     eng.game.feed = _c.deque(maxlen=5)
     eng._clean_times = _c.deque(maxlen=1)           # 8 KB per clean lap; fills slowly when laps have traffic
+    from simcoach.coach import FocusDrill
+    max_results = FocusDrill.MAX_RESULTS
+    FocusDrill.MAX_RESULTS = 3                      # drill attempts: one or two per lap until the cap (class:
+                                                    # the drill object is recreated when the reference changes)
+    eng.coach.voice.RECENT_MAX = 8                  # voice de-dup map: grows with every new phrase until the cap
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
@@ -351,7 +356,7 @@ def test_no_memory_growth_over_long_session():
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
 
-    run(6)                                  # warm-up: fill the (shrunken) caps, numpy pools
+    run(12)                                 # warm-up: fill the (shrunken) caps, numpy pools, dict shapes
     gc.collect()
     tracemalloc.start()
     def to_lap_end():                       # measure at the same point of a lap each time
@@ -364,15 +369,26 @@ def test_no_memory_growth_over_long_session():
     samples = []
     for _ in range(12):
         to_lap_end()
+        # "last lap" (and its comparison) and "session best" are separate laps until the latest
+        # lap becomes the best, which made readings jump by a whole lap at random. Drop those
+        # references before each reading so every reading holds the same laps.
+        eng.last_lap = None
+        eng.last_comparison = None
         gc.collect()
         samples.append(tracemalloc.get_traced_memory()[0])
     tracemalloc.stop()
     spread = max(samples) - min(samples)
-    # Bounded: memory may differ by one retained lap (~105 KB: "last lap" and "session best" are
-    # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
-    assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
+    print("memory per lap (KiB):", [round(x / 1024) for x in samples])
+    # A leak grows memory on (nearly) every lap, so judge the typical growth per lap: the median
+    # of the lap-to-lap changes. One-off steps (a cache set up once, ~105 KB at some lap, never
+    # repeated - checked over 50 laps) don't move the median. A leak of >= 5 KB per lap fails.
+    per_lap = sorted(b - a for a, b in zip(samples, samples[1:]))[len(samples) // 2 - 1]
+    assert per_lap < 5_000, f"memory grows ~{per_lap / 1024:.1f} KiB per lap: {[round(x / 1024) for x in samples]} KiB"
+    assert spread < 250_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
     assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
     assert len(eng.traffic._hist) <= 120 and len(eng._clean_times) <= 5 and len(eng.traffic._last_ev) <= 128
+    assert len(eng.coach.focus.results) <= 3 and len(eng.coach.voice._recent) <= 8 + 20
+    FocusDrill.MAX_RESULTS = max_results
 
 
 # ------------------------------------------------------------------ v4: auto-update
@@ -1435,3 +1451,92 @@ def test_race_prep_api_planner_fuel_training_and_reference(tmp_path, monkeypatch
     ref = client.post("/api/live/reference", json={"lap": "local:" + prep["files"]["eco"]}).json()
     assert "fuel-save" in ref["reference"]
     assert client.post("/api/prep/nope/fuel", json={}).status_code == 404
+
+
+# ------------------------------------------------- consistency: faster laps count (unless fuel was burned)
+def test_consistency_faster_laps_count_and_fuel_gate():
+    from simcoach.consistency import ConsistencyTrainer
+    ct = ConsistencyTrainer()
+    ct.start(90.0, 0.3, 10)
+    assert ct.add_lap(90.1, True, None)["inside"]                      # in the window
+    r = ct.add_lap(89.4, True, None)                                     # 0.6 s faster -> still counts
+    assert r["inside"] and r["faster"] and ct.streak == 2 and "still counts" in ct.message
+    assert "Faster, still counts" in ct.spoken(r)
+    r = ct.add_lap(90.5, True, None)                                     # slower than the window -> breaks it
+    assert not r["inside"] and ct.streak == 0
+    # fuel saving on: faster but over the fuel target -> doesn't count
+    r = ct.add_lap(89.3, True, None, fuel_ok=False, fuel_over=0.15)
+    assert not r["inside"] and r["fuel_miss"] and "0.15 L over the fuel target" in r["why"]["text"]
+    assert ct.spoken(r) == "Faster, but over the fuel target"
+    # faster and on fuel target -> counts
+    assert ct.add_lap(89.5, True, None, fuel_ok=True)["inside"]
+    # three faster laps in a row move the target to the new pace
+    ct.add_lap(89.4, True, None, fuel_ok=True)
+    r = ct.add_lap(89.45, True, None, fuel_ok=True)
+    assert r["retarget"] == 89.45 and ct.target == 89.45 and ct.streak == 3
+    assert ct.add_lap(89.6, True, None)["inside"] and not ct.status()["recent"][-1]["faster"]
+    # strict mode: the old two-sided window
+    ct.start(90.0, 0.3, 5, faster_ok=False)
+    assert not ct.add_lap(89.4, True, None)["inside"]
+
+
+def test_prep_lift_points_braking_zone_and_teammate_cues(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from simcoach import prep as pr
+    from simcoach.lap import Lap as _Lap
+    ref = demo.reference_lap()
+    # chicane: braking for the previous corner just before - the zone for THIS apex is found
+    lap = _Lap(**{k: getattr(ref, k) for k in ref.__dataclass_fields__})
+    lap.brake = np.zeros(len(GRID)); lap.brake[100:111] = 1.0; lap.brake[118:131] = 0.5   # previous zone harder
+    assert pr.braking_zone_start(lap, 135, 100) == 118
+    assert pr.braking_zone_start(lap, 116, 100, floor=111) is None        # never past the previous apex
+    lap.brake[:] = 0.0
+    assert pr.braking_zone_start(lap, 135, 100) is None                 # flat-out corner: no zone
+    # fuel-save lap lifts 60 m earlier before ONE corner only
+    eco = _Lap(**{k: getattr(ref, k) for k in ref.__dataclass_fields__})
+    eco.throttle = ref.throttle.copy()
+    corners = detect_corners(ref)
+    c = corners[2]
+    back = int(600 / (ref.track_length / len(GRID)))
+    b = pr.braking_zone_start(ref, c.apex, back)
+    n60 = int(round(60 / (ref.track_length / len(GRID))))
+    eco.throttle[b - n60:b] = 0.0
+    pts = pr.lift_points(ref, eco, "Demo Ring - GP")
+    assert len(pts) == 1 and pts[0]["index"] == c.index
+    assert 50 <= pts[0]["lift_earlier_m"] <= 70 and abs(pts[0]["brake_pct"] - float(GRID[b])) < 0.002
+    assert pr.lift_points(ref, ref) == []                                # identical laps: nothing to report
+    # engine: LIFT cues at the teammate's lift point, before my brake point for that corner
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(ref)
+    plan = eng.enable_fuel_save_points(pts, 2.9, "Max")
+    assert plan["available"] and plan["source"] == "teammate" and len(plan["plan"]) == 1
+    z = plan["plan"][0]
+    assert z["index"] == c.index and 50 <= z["lift_m"] <= 70 and z["lift_bin"] == round(pts[0]["lift_pct"] * len(GRID))
+    assert eng.fuel_target_per_lap() == 2.9
+    cue = eng._brake_cue(float(GRID[z["lift_bin"]]) - 0.001)
+    assert cue and cue["kind"] == "lift" and cue["corner"] == z["corner"]
+
+
+def test_prep_fuel_training_uses_teammate_lift_points(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    p = tmp_path / "stint.ibt"
+    _make_race_ibt(p)
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    up = client.post("/api/laps/upload", params={"filename": "stint.ibt"}, content=p.read_bytes()).json()
+    prep = client.post("/api/prep/from_upload", json={"upload_id": up["upload_id"]}).json()
+    pts = prep["eco"]["lift_points"]
+    assert len(pts) == 7 and all(65 <= x["lift_earlier_m"] <= 95 and 65 <= x["coast_m"] <= 95 for x in pts)
+    assert len({x["brake_pct"] for x in pts}) == 7                        # every corner its own braking zone
+    _drive(eng, 2.3)
+    r = client.post(f"/api/prep/{prep['id']}/fuel", json={"target": "eco"}).json()
+    assert r["active"] and r["source"] == "teammate" and r["goal"] == prep["eco"]["fuel_used"]
+    assert len(r["plan"]) == len(pts) and all(65 <= z["lift_m"] <= 95 for z in r["plan"])
+    # "match their typical fuel" still uses your own estimated plan
+    r2 = client.post(f"/api/prep/{prep['id']}/fuel", json={"target": "typical"}).json()
+    assert r2.get("already") or (r2["active"] and r2.get("source") != "teammate")

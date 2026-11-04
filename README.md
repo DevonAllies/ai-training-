@@ -182,6 +182,13 @@ The Live tab's **Consistency trainer** is for race pace: the same lap, every lap
 5. **The track map** shows where you're inconsistent: red is a corner that varies more than your typical corner, green is steadier.
 6. **From the plan:** the practice plan's *Consistency run* starts the trainer with one click and ticks itself off when you reach the goal.
 
+
+**Faster laps count** (race pace; on by default):
+- A lap quicker than the window keeps the streak going; the voice says "faster, still counts".
+- With fuel saving on, a faster lap counts only if it also hit the fuel target. If you burned extra fuel to go faster, the streak breaks and the trainer says how much you were over.
+- Three faster laps in a row move the target down to your new pace.
+- Untick **Faster laps count** for the strict two-sided window.
+
 ## Weekly training goal and streak
 
 At the top of the **Progress** tab you can set a weekly goal: **minutes on track** (default 3 hours), **sessions** or **laps** per week.
@@ -221,12 +228,13 @@ When a teammate sends you the `.ibt` of a stint or a whole race, upload it on th
 - **Race pace:** typical lap (median of clean laps within 3 % of the best), best lap, and consistency.
 - **Stints:** split at pit stops, with laps, average and pace drop-off (tyres) for each.
 - **Fuel:** fuel per lap (median of clean laps), its range, and fuel per stint.
-- **Fuel-saving lap:** their most fuel-efficient clean lap, what it saved, and what it cost against their race pace. It also shows *where* they lift and coast: per corner, how many metres earlier they come off the throttle than on their fastest lap.
+- **Fuel-saving lap:** their most fuel-efficient clean lap, what it saved, and what it cost against their race pace. It also shows *where* they lift and coast: per corner, how many metres earlier they come off the throttle than on their fastest lap, and how far they coast to the brakes. Each braking zone is the one nearest that corner's apex (never the previous corner's), and corners use the track's corner names.
 
 Then you can:
 
 - **Use in endurance planner:** fills in their race pace and fuel per lap. "Fill from teammate prep" in the planner does the same.
-- **Fuel training: match their fuel per lap (or their fuel-save lap):** compares your own fuel per lap with theirs and turns on lift-and-coast cues for the difference.
+- **Fuel training: match their fuel-save lap:** **LIFT** is cued at the points where your teammate actually lifted on that lap (track positions from their file), before your own braking point for each corner. The target is their fuel per lap on that lap.
+- **Fuel training: match their typical fuel per lap:** same target idea, but the lift points are estimated from your own lap.
 - **Fuel-save lap as my reference:** your live delta runs against their fuel-saving lap, so you learn to save fuel without losing more time than they did.
 - **Their fastest lap as my reference.**
 

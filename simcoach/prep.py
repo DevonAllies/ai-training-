@@ -52,42 +52,66 @@ def _slope(xs, ys):
     return None if den == 0 else sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
 
 
-def _off_throttle_m(lap: Lap, brake_bin: int, look_bins: int, bin_m: float) -> float | None:
-    """Distance (m) from the last full-throttle point to the braking point before a corner."""
-    lo = max(0, brake_bin - look_bins)
-    thr = lap.throttle[lo:brake_bin + 1]
-    full = np.flatnonzero(thr > 0.9)
-    if not len(full):
+def braking_zone_start(lap: Lap, apex: int, max_back: int, floor: int = 0) -> int | None:
+    """First bin of the braking zone that leads into this apex. Searched backwards from the
+    apex, taking the zone nearest to it and never going back past `floor` (the previous
+    corner's apex), so a previous corner's braking - chicanes, close corners - is never used."""
+    lo = max(0, floor, apex - max_back)
+    if apex <= lo:
         return None
-    return float((brake_bin - (lo + full[-1])) * bin_m)
+    seg = lap.brake[lo:apex + 1]
+    hard = np.flatnonzero(seg > 0.15)
+    if not len(hard):
+        return None                                  # no real braking for this corner
+    i = lo + int(hard[-1])                           # braking nearest the apex
+    while i > lo and lap.brake[i - 1] > 0.05:        # back to where that braking zone starts
+        i -= 1
+    return i
 
 
-def _brake_bin(lap: Lap, start: int, apex: int) -> int | None:
-    seg = lap.brake[start:apex + 1]
-    on = np.flatnonzero(seg > 0.1)
-    return int(start + on[0]) if len(on) else None
+def lift_start(lap: Lap, brake_bin: int, max_back: int, floor: int = 0) -> int:
+    """Where the driver came off the throttle before this braking point (throttle < 50 %)."""
+    lo = max(0, floor, brake_bin - max_back)
+    i = brake_bin
+    while i > lo and lap.throttle[i - 1] < 0.5:
+        i -= 1
+    return i
 
 
-def lift_points(fast: Lap, eco: Lap) -> list[dict]:
-    """Where the fuel-saving lap comes off the throttle earlier than the fastest lap."""
+def lift_points(fast: Lap, eco: Lap, track: str = "") -> list[dict]:
+    """Where the fuel-saving lap comes off the throttle earlier than the fastest lap.
+
+    For each braking zone: the lift point (off the throttle) and brake point on both laps,
+    as track positions (lap fraction), so the fuel training can cue LIFT exactly where the
+    teammate lifted."""
     L = fast.track_length or eco.track_length or 4000.0
     bin_m = L / len(GRID)
-    look = int(400 / bin_m)                          # look up to 400 m before the braking point
+    back = int(600 / bin_m)                          # look up to 600 m back
+    corners = detect_corners(fast)
+    if track:
+        try:
+            from .corners import apply_names
+            apply_names(corners, track)
+        except Exception:                            # names are cosmetic
+            log.debug("corner names unavailable", exc_info=True)
     out = []
-    for c in detect_corners(fast):
-        bf, be = _brake_bin(fast, c.start, c.apex), _brake_bin(eco, c.start, c.apex)
-        if bf is None:
+    for k, c in enumerate(corners):
+        floor = corners[k - 1].apex + 1 if k > 0 else 0    # never back past the previous corner
+        bf = braking_zone_start(fast, c.apex, back, floor)
+        be = braking_zone_start(eco, c.apex, back, floor)
+        if bf is None or be is None:
             continue
-        a = _off_throttle_m(fast, bf, look, bin_m)
-        b = _off_throttle_m(eco, be if be is not None else bf, look, bin_m)
-        if a is None or b is None:
+        lf, le = lift_start(fast, bf, back, floor), lift_start(eco, be, back, floor)
+        earlier = (lf - le) * bin_m                  # + = eco lifts earlier (closer to the previous corner)
+        coast_e, coast_f = (be - le) * bin_m, (bf - lf) * bin_m
+        if earlier < 12 or coast_e - coast_f < 10:
             continue
-        earlier = b - a + ((bf - be) * bin_m if be is not None else 0.0)   # lift earlier and/or brake later
         lost = float((eco.time[c.end] - eco.time[c.start]) - (fast.time[c.end] - fast.time[c.start]))
-        if earlier > 12:
-            out.append({"corner": c.title or c.name, "index": c.index, "lift_earlier_m": round(earlier),
-                        "coast_m": round(b), "brake_later_m": round((be - bf) * bin_m) if be is not None else None,
-                        "time_lost_s": round(lost, 3)})
+        out.append({"corner": c.title or c.name, "index": c.index, "apex_pct": round(float(GRID[c.apex]), 5),
+                    "lift_earlier_m": round(earlier), "coast_m": round(coast_e),
+                    "brake_later_m": round((be - bf) * bin_m),
+                    "lift_pct": round(float(GRID[le]), 5), "brake_pct": round(float(GRID[be]), 5),
+                    "fast_lift_pct": round(float(GRID[lf]), 5), "time_lost_s": round(lost, 3)})
     return out
 
 
@@ -152,7 +176,8 @@ def build_prep(info: dict, laps: list[Lap], driver: str | None = None) -> dict:
         out["eco"] = dict(eco_row, saved_l=round(pace["fuel_per_lap"] - eco_row["fuel_used"], 3),
                           cost_s=round(eco_row["lap_time"] - pace["lap_time"], 3))
         try:
-            out["eco"]["lift_points"] = lift_points(by_lap[fast_row["lap"]], by_lap[eco_row["lap"]])
+            track = " - ".join(x for x in (info.get("track"), info.get("track_config")) if x)
+            out["eco"]["lift_points"] = lift_points(by_lap[fast_row["lap"]], by_lap[eco_row["lap"]], track)
         except Exception:                            # never let the extra analysis break the prep
             log.exception("lift point analysis failed")
             out["eco"]["lift_points"] = []
@@ -185,9 +210,9 @@ def _takeaways(p: dict) -> list[str]:
     if e:
         t.append(f"Fuel-saving lap {e['lap']}: {e['fuel_used']:.2f} L ({e['saved_l']:.2f} L less) for "
                  f"{e['cost_s']:+.2f} s vs typical pace.")
-        for lp in (e.get("lift_points") or [])[:4]:
-            t.append(f"  {lp['corner']}: off the throttle {lp['lift_earlier_m']} m earlier "
-                     f"({lp['time_lost_s']:+.2f} s).")
+        for lp in (e.get("lift_points") or [])[:6]:
+            t.append(f"  {lp['corner']}: off the throttle {lp['lift_earlier_m']} m earlier, coasting "
+                     f"{lp['coast_m']} m to the brakes ({lp['time_lost_s']:+.2f} s).")
     return t
 
 

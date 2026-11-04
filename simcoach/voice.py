@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 
 class VoiceCoach:
+    RECENT_MAX = 64                    # phrases remembered for de-duplication (bounded)
     def __init__(self, native: bool = True, max_queue: int = 3, log_size: int = 20):
         if os.environ.get("SIMCOACH_NO_NATIVE_VOICE"):      # tests / CI machines
             native = False
@@ -47,7 +48,7 @@ class VoiceCoach:
             if last is not None and now - last < min_repeat_s:
                 return False
             self._recent[text] = now
-            if len(self._recent) > 64:                      # keep the dedupe map bounded
+            if len(self._recent) > self.RECENT_MAX:          # keep the dedupe map bounded
                 cutoff = now - 60
                 self._recent = {k: v for k, v in self._recent.items() if v > cutoff}
             self.log.append({"id": next(self._ids), "text": text})

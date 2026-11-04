@@ -1048,9 +1048,18 @@ class LiveEngine:
             info["traffic_s"], info["traffic_lost"] = t["traffic_s"], t.get("lost_s")
             if buf.valid and not t["in_traffic"]:
                 self._clean_times.append(lap.time.copy())
+        fuel_over = None
+        if self.fuel_save and fuel_used and self.config.on("endurance"):     # before consistency: it uses this
+            goal = self.fuel_target_per_lap()
+            if goal:
+                ok = buf.valid and fuel_used <= goal + 0.02
+                info["fuel_ok"] = ok
+                fuel_over = round(fuel_used - goal, 2) if not ok else None
+                self._game_event("fuel_lap", ok=ok)
         if self.config.on("consistency") and self.consistency.active and not self.race_mode:
             res = self.consistency.add_lap(lap_time, buf.valid,
-                                           (self.last_comparison or {}).get("corners") if self.reference else None)
+                                           (self.last_comparison or {}).get("corners") if self.reference else None,
+                                           fuel_ok=info.get("fuel_ok"), fuel_over=fuel_over)
             phrase = self.consistency.spoken(res) if res else None
             if phrase:
                 self.coach._say(phrase, important=True)
@@ -1062,12 +1071,6 @@ class LiveEngine:
                     if p.get("consistency") and p["status"] == "active":
                         self.coach.finish_step(p)
             info["consistency"] = None if not res else {"inside": res.get("inside"), "delta": res.get("delta")}
-        if self.fuel_save and fuel_used and self.config.on("endurance"):
-            goal = self.fuel_target_per_lap()
-            if goal:
-                ok = buf.valid and fuel_used <= goal + 0.02
-                info["fuel_ok"] = ok
-                self._game_event("fuel_lap", ok=ok)
         if self.race_rec.active and self.is_race:
             self.race_rec.add_lap({"lap": self.lap_count, "lap_time": round(lap_time, 3), "valid": buf.valid,
                                    "pit": buf.pit, "fuel_used": fuel_used, "fuel_ok": info.get("fuel_ok"),
@@ -1085,6 +1088,8 @@ class LiveEngine:
     def fuel_target_per_lap(self) -> float | None:
         """Fuel per lap to hit in fuel-save mode (litres)."""
         fs = self.fuel_save or {}
+        if fs.get("goal_fpl"):
+            return fs["goal_fpl"]
         if (fs.get("extra_lap") or {}).get("target_fuel_per_lap"):
             return fs["extra_lap"]["target_fuel_per_lap"]
         fpl = fs.get("fuel_per_lap")
@@ -1165,14 +1170,63 @@ class LiveEngine:
             if extra_lap and fpl and self.last_sample and self.last_sample.get("fuel"):
                 info = extra_lap_target(float(self.last_sample["fuel"]), fpl)
                 target = info["save_per_lap"]
+            # always the reference's corners (same track positions), so plan indices match the
+            # corner numbering the cues and voice use
             plan = lift_plan(base, target_save_per_lap=target, fuel_per_lap=fpl,
-                             corners=self.ref_corners if base is self.reference else None)
+                             corners=self.ref_corners or None)
             if not plan.get("available"):
                 return plan
             plan["extra_lap"] = info
             plan["fuel_per_lap"] = fpl
             self.fuel_save = plan
             return plan
+
+    def enable_fuel_save_points(self, points: list[dict], goal_fpl: float, who: str,
+                                eco: dict | None = None) -> dict:
+        """Fuel training on a teammate's fuel-save lap: LIFT where *they* lifted (track position
+        from their .ibt), before *your* braking point for that corner."""
+        with self.lock:
+            if not self.ref_corners:
+                return {"available": False, "reason": "Set a reference lap (or drive a lap) first."}
+            L = self.track_length()
+            plan, used = [], set()
+            for pnt in points:
+                lift_pct = pnt.get("lift_pct")
+                if lift_pct is None:
+                    continue
+                # their braking zone -> the reference corner whose apex follows it most closely
+                best = None
+                for idx, rc in enumerate(self.ref_marks):
+                    ahead = ((GRID[rc.apex] - pnt["brake_pct"]) % 1.0) * L    # metres to that apex
+                    if ahead < 450 and (best is None or ahead < best[0]) and idx not in used:
+                        best = (ahead, idx, rc)
+                if best is None:
+                    continue
+                _, idx, rc = best
+                used.add(idx)
+                brake_bin = rc.brake if rc.brake is not None else int(round(pnt["brake_pct"] * N_BINS))
+                lift_bin = int(round(lift_pct * N_BINS)) % N_BINS
+                lift_m = ((GRID[brake_bin] - GRID[lift_bin]) % 1.0) * L
+                if lift_m <= 5 or lift_m > 700:
+                    continue
+                plan.append({"index": idx, "corner": rc.corner.name, "title": rc.corner.title or rc.corner.name,
+                             "lift_m": round(lift_m), "lift_bin": lift_bin, "brake_bin": brake_bin,
+                             "saved_l": None, "lost_s": pnt.get("time_lost_s"), "speed_kmh": None,
+                             "teammate_lift_earlier_m": pnt.get("lift_earlier_m")})
+            if not plan:
+                return {"available": False, "reason": f"Couldn't match {who}'s lift points to your corners "
+                                                      f"(same track and layout?)."}
+            plan.sort(key=lambda p: p["index"])
+            fpl = self.race.fuel_per_lap()
+            if not fpl:
+                base = self.last_lap or self.session_best
+                fpl = (base.meta or {}).get("fuel_used") if base is not None else None
+            save = round(fpl - goal_fpl, 3) if fpl else None
+            self.fuel_save = {"available": True, "plan": plan, "source": "teammate", "who": who,
+                              "target_l": save, "fuel_per_lap": fpl, "goal_fpl": goal_fpl, "reached": True,
+                              "total_saved_l": (eco or {}).get("saved_l"), "total_lost_s": (eco or {}).get("cost_s"),
+                              "coast_model": {"measured": True}, "extra_lap": None}
+            return self.fuel_save
 
     def disable_fuel_save(self) -> None:
         with self.lock:
