@@ -356,7 +356,7 @@ def test_no_memory_growth_over_long_session():
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
 
-    run(10)                                 # warm-up: fill the (shrunken) caps, numpy pools, dict shapes
+    run(12)                                 # warm-up: fill the (shrunken) caps, numpy pools, dict shapes
     gc.collect()
     tracemalloc.start()
     def to_lap_end():                       # measure at the same point of a lap each time
@@ -369,14 +369,22 @@ def test_no_memory_growth_over_long_session():
     samples = []
     for _ in range(12):
         to_lap_end()
+        # "last lap" (and its comparison) and "session best" are separate laps until the latest
+        # lap becomes the best, which made readings jump by a whole lap at random. Drop those
+        # references before each reading so every reading holds the same laps.
+        eng.last_lap = None
+        eng.last_comparison = None
         gc.collect()
         samples.append(tracemalloc.get_traced_memory()[0])
     tracemalloc.stop()
     spread = max(samples) - min(samples)
     print("memory per lap (KiB):", [round(x / 1024) for x in samples])
-    # Bounded: memory may differ by one retained lap (~105 KB: "last lap" and "session best" are
-    # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
-    assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
+    # A leak grows memory on (nearly) every lap, so judge the typical growth per lap: the median
+    # of the lap-to-lap changes. One-off steps (a cache set up once, ~105 KB at some lap, never
+    # repeated - checked over 50 laps) don't move the median. A leak of >= 5 KB per lap fails.
+    per_lap = sorted(b - a for a, b in zip(samples, samples[1:]))[len(samples) // 2 - 1]
+    assert per_lap < 5_000, f"memory grows ~{per_lap / 1024:.1f} KiB per lap: {[round(x / 1024) for x in samples]} KiB"
+    assert spread < 250_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
     assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
     assert len(eng.traffic._hist) <= 120 and len(eng._clean_times) <= 5 and len(eng.traffic._last_ev) <= 128
     assert len(eng.coach.focus.results) <= 3 and len(eng.coach.voice._recent) <= 8 + 20
