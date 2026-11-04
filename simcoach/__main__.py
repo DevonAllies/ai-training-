@@ -192,7 +192,8 @@ def main(argv: list[str] | None = None) -> None:
     stop = threading.Event()
     from .updater import Updater
     updater = Updater(config, __version__,
-                      is_busy=lambda: bool(engine.connected and engine.last_sample
+                      # never install while driving - the demo driver doesn't count
+                      is_busy=lambda: bool(not args.demo and engine.connected and engine.last_sample
                                            and engine.last_sample.get("on_track")),
                       on_quit=quit_all)
     def restart_live():
@@ -209,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
                      on_restart=restart_app, bind_host=host, port=args.port)
     engine.on_session_change = auto_sector_targets
     engine.start()
-    if not args.no_update and not args.demo:
+    if not args.no_update:              # demo mode too - otherwise it never updates there
         updater.start()
     if args.updated:
         log.info("Updated to %s", __version__)

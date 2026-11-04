@@ -110,6 +110,15 @@ class TrainingIn(BaseModel):
     save_per_lap: float | None = None
 
 
+class PrepIn(BaseModel):
+    upload_id: str
+    driver: str | None = None          # override the teammate's name
+
+
+class PrepFuelIn(BaseModel):
+    target: str = "typical"            # "typical" = their race fuel/lap, "eco" = their fuel-saving lap
+
+
 class FeaturesIn(BaseModel):
     features: dict
 
@@ -717,6 +726,16 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             if stats["laps"] and (best_exp is None or stats["laps"] > best_exp["laps"]):
                 best_exp = dict(stats, track=data.get("track"), car=data.get("car"), date=data.get("date"))
         out["export"] = best_exp
+        # teammate race preps (.ibt) for this track - newest first
+        from . import prep as pr
+        tp = None
+        for item in pr.list_preps():
+            name = f"{item.get('track', '')} {item.get('track_config', '')}"
+            if track_name and not _same_track(engine.session or {"track": track_name}, name, 0.3):
+                continue
+            tp = item
+            break
+        out["teammate"] = tp
         return out
 
     @app.post("/api/fuelsave")
@@ -926,10 +945,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def update_check():
         if updater is None:
             raise HTTPException(400, "Updater not running")
-        try:
-            return updater.run_once()
-        except Exception as exc:
-            raise HTTPException(502, f"Update check failed: {exc}") from exc
+        return updater.check_now()          # background; the page polls /api/update
 
     @app.post("/api/update/install")
     def update_install():
@@ -1069,6 +1085,59 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def race_reports():
         from . import race_report as rr
         return rr.list_reports()
+
+    # ------------------------------------------------- teammate race prep (.ibt)
+    @app.post("/api/prep/from_upload")
+    def prep_from_upload(body: PrepIn):
+        """Race prep (pace, fuel, stints, fuel-saving lap) from all laps of an uploaded .ibt."""
+        from . import prep as pr
+        up = uploads.get(body.upload_id)
+        if not up:
+            raise HTTPException(404, "Upload expired - upload the file again.")
+        if len(up["laps"]) < 2:
+            raise HTTPException(422, "Race prep needs a file with several laps (a stint or a race).")
+        p = pr.build_prep(up["info"], up["laps"], body.driver)
+        return pr.save_prep(p, up["laps"])
+
+    @app.get("/api/preps")
+    def preps():
+        from . import prep as pr
+        return pr.list_preps()
+
+    @app.get("/api/prep/{pid}")
+    def get_prep(pid: str):
+        from . import prep as pr
+        try:
+            return pr.load_prep(pid)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(404, "No such race prep") from exc
+
+    @app.post("/api/prep/{pid}/fuel")
+    def prep_fuel(pid: str, body: PrepFuelIn):
+        """Fuel training against the teammate: lift-and-coast down to their fuel per lap."""
+        need("endurance")
+        from . import prep as pr
+        try:
+            p = pr.load_prep(pid)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(404, "No such race prep") from exc
+        goal = (p.get("eco") or {}).get("fuel_used") if body.target == "eco" else p["fuel"].get("per_lap")
+        if not goal:
+            raise HTTPException(422, "This file has no fuel data (FuelLevel) for those laps.")
+        mine = engine.race.fuel_per_lap()
+        if not mine:
+            base = engine.last_lap or engine.session_best
+            mine = (base.meta or {}).get("fuel_used") if base is not None else None
+        if not mine:
+            raise HTTPException(422, "Drive a clean lap first so SimCoach knows your own fuel per lap.")
+        save = round(mine - goal, 3)
+        if save <= 0.005:
+            return {"active": False, "already": True, "mine": mine, "goal": goal,
+                    "message": f"You already use {mine:.2f} L per lap - at or under {p['driver']}'s {goal:.2f} L."}
+        plan = engine.enable_fuel_save(save_per_lap=save)
+        if not plan.get("available"):
+            raise HTTPException(422, plan.get("reason", "Fuel saving plan not available"))
+        return {"active": True, "mine": mine, "goal": goal, "save_per_lap": save, **plan}
 
     @app.get("/api/game")
     def game_status():

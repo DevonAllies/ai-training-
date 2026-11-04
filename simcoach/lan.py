@@ -16,7 +16,8 @@ import socket
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 # Requests that only this PC may make (everything else is fine from a tablet).
-_LOCAL_ONLY_POST = {"/api/config", "/api/quit", "/api/exit_demo", "/api/restart", "/api/voice/test"}
+_LOCAL_ONLY_POST = {"/api/config", "/api/quit", "/api/exit_demo", "/api/restart", "/api/voice/test",
+                    "/api/update/install"}
 
 
 def is_local(host: str | None) -> bool:

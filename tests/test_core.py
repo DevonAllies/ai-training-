@@ -477,7 +477,12 @@ def test_update_api_endpoints():
     cfg = Config()
     client = TestClient(create_app(LiveEngine(cfg, DemoSource()), cfg, updater=u))
     assert client.get("/api/update").json()["status"] == "idle"
-    assert client.post("/api/update/check").json()["status"] == "ready"
+    assert client.post("/api/update/check").json()["status"] in ("checking", "ready")   # runs in the background
+    for _ in range(100):
+        if client.get("/api/update").json()["status"] == "ready":
+            break
+        time.sleep(0.05)
+    assert client.get("/api/update").json()["status"] == "ready"
     assert client.post("/api/config", json={"update_mode": "off"}).json()["update_mode"] == "off"
 
 
@@ -1294,3 +1299,139 @@ def test_race_mode_turns_training_off_and_records_report(tmp_path, monkeypatch):
     # race mode off -> training back on in races
     client.post("/api/config", json={"race_mode": False})
     assert not eng.race_mode
+
+
+def test_updater_reports_failed_install_and_serialises_checks(tmp_path, monkeypatch):
+    import json as _json
+    import threading as _th
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from simcoach.updater import Updater, updates_dir
+    # an install of 0.8.0 was started, but we're still on 0.7.0 -> reported, with the installer log
+    (updates_dir() / "pending.json").write_text(_json.dumps({"from": "0.7.0", "to": "0.8.0"}))
+    (updates_dir() / "install.log").write_text("2026-11-04 09:00:00.000   Log opened.\n"
+                                               "2026-11-04 09:00:01.000   DeleteFile failed; code 5.\n")
+    u = Updater(Config(update_mode="auto"), "0.7.0")
+    st = u.status()
+    assert st["last_install_failed"] == "0.8.0" and "didn't install" in st["install_problem"]
+    assert "DeleteFile failed" in st["install_problem"] and not (updates_dir() / "pending.json").exists()
+    # the update did install -> no warning, marker cleared
+    (updates_dir() / "pending.json").write_text(_json.dumps({"from": "0.7.0", "to": "0.8.0"}))
+    u2 = Updater(Config(), "0.8.0")
+    assert u2.status()["install_problem"] is None and not (updates_dir() / "pending.json").exists()
+    # check button + background loop never run two checks/downloads at once
+    gate = _th.Event()
+    calls = []
+
+    def slow_check():
+        calls.append(1)
+        gate.wait(2)
+        u2._set(status="up_to_date")
+        return u2.status()
+    u2.check = slow_check
+    u2.check_now()
+    time.sleep(0.05)
+    assert u2.run_once()["status"] == "checking" and len(calls) == 1      # second one skipped
+    gate.set()
+
+
+def test_phone_cannot_install_updates():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config()
+    app = create_app(LiveEngine(cfg, DemoSource()), cfg, bind_host="0.0.0.0")
+    phone = TestClient(app, client=("192.168.1.50", 5000))
+    assert phone.post("/api/update/install").status_code == 403
+
+
+# ------------------------------------------------- v12: teammate race prep from a multi-lap .ibt
+def _make_race_ibt(path, n_laps=10, pit_after=5, eco_lap=8):
+    """Teammate stint: laps with slight pace variation, fuel burning, a refuel stop and one
+    fuel-saving lap that comes off the throttle 80 m before every braking zone."""
+    from simcoach.ibt import write_ibt
+    ref = demo.reference_lap()
+    dt, L = 1 / 60, demo.TRACK_LENGTH
+    bin_m = L / len(GRID)
+    on = (ref.brake > 0.1).astype(int)
+    starts = np.flatnonzero(np.diff(np.r_[0, on]) == 1)
+    lift = np.zeros(len(GRID), bool)
+    for b in starts:
+        lift[max(0, b - int(80 / bin_m)):b] = True
+    rows = {k: [] for k in ("t", "pct", "lap", "spd", "thr", "brk", "pit", "fuel")}
+    p, tt, n, fuel = 0.9, 100.0, 0, 60.0
+    while n <= n_laps:
+        eco = n == eco_lap
+        scale = 0.996 if eco else (1.0 - 0.001 * (n % 3))
+        v = float(np.interp(p, GRID, ref.speed, period=1)) * scale
+        i = min(len(GRID) - 1, int(p * len(GRID)))
+        thr = 0.0 if (eco and lift[i]) else float(np.interp(p, GRID, ref.throttle, period=1))
+        in_pit = n == pit_after and p > 0.9 or n == pit_after + 1 and p < 0.05
+        burn = (2.6 if eco else 3.0) / 88.0                       # L per second -> ~3.0 L per lap
+        fuel = fuel - burn * dt if not (n == pit_after + 1 and 0.02 < p < 0.03) else 60.0
+        for k, val in (("t", tt), ("pct", p), ("lap", n), ("spd", v), ("thr", thr),
+                       ("brk", float(np.interp(p, GRID, ref.brake, period=1))), ("pit", in_pit), ("fuel", fuel)):
+            rows[k].append(val)
+        p += v * dt / L
+        tt += dt
+        if p >= 1:
+            p -= 1
+            n += 1
+    pct = np.array(rows["pct"])
+    ch = {"SessionTime": np.array(rows["t"]), "LapDistPct": pct.astype(np.float32),
+          "Lap": np.array(rows["lap"], dtype=np.int32), "Speed": np.array(rows["spd"], dtype=np.float32),
+          "Throttle": np.array(rows["thr"], dtype=np.float32), "Brake": np.array(rows["brk"], dtype=np.float32),
+          "Gear": np.interp(pct, GRID, ref.gear).astype(np.int32),
+          "SteeringWheelAngle": np.interp(pct, GRID, ref.steer).astype(np.float32),
+          "OnPitRoad": np.array(rows["pit"]), "IsOnTrack": np.ones(len(pct), bool),
+          "PlayerTrackSurface": np.full(len(pct), 3, np.int32), "FuelLevel": np.array(rows["fuel"], dtype=np.float32),
+          "Lat": np.interp(pct, GRID, ref.lat), "Lon": np.interp(pct, GRID, ref.lon)}
+    yml = ("---\nWeekendInfo:\n TrackDisplayName: Demo Ring\n TrackConfigName: GP\n TrackLength: 4.20 km\n"
+           "DriverInfo:\n DriverCarIdx: 0\n Drivers:\n - CarIdx: 0\n   UserName: Max Teammate\n"
+           "   CarScreenName: Demo GT3\n...\n")
+    write_ibt(path, ch, yml)
+
+
+def test_race_prep_from_teammate_ibt(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from simcoach.ibt import extract_laps
+    from simcoach import prep as pr
+    p = tmp_path / "stint.ibt"
+    _make_race_ibt(p)
+    info, found = extract_laps(p)
+    prep = pr.build_prep(info, [x.lap for x in found])
+    assert prep["driver"] == "Max Teammate" and prep["lap_count"] >= 9
+    assert len(prep["stints"]) == 2                                   # split at the pit stop
+    assert prep["fuel"]["per_lap"] == pytest.approx(3.0, abs=0.15)
+    e = prep["eco"]
+    assert e and e["lap"] == 8 and e["saved_l"] > 0.25 and e["cost_s"] > 0
+    lp = e["lift_points"]
+    assert lp and all(40 <= x["lift_earlier_m"] <= 130 for x in lp)    # ~80 m earlier off the throttle
+    assert any("Fuel-saving lap 8" in t for t in prep["takeaways"])
+    saved = pr.save_prep(prep, [x.lap for x in found])
+    assert saved["files"]["eco"] and saved["files"]["fastest"]
+    assert pr.list_preps()[0]["id"] == saved["id"] and pr.load_prep(saved["id"])["eco"]["lap"] == 8
+
+
+def test_race_prep_api_planner_fuel_training_and_reference(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path / "home"))
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    p = tmp_path / "stint.ibt"
+    _make_race_ibt(p)
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    up = client.post("/api/laps/upload", params={"filename": "stint.ibt"}, content=p.read_bytes()).json()
+    prep = client.post("/api/prep/from_upload", json={"upload_id": up["upload_id"], "driver": "Max"}).json()
+    assert prep["driver"] == "Max" and prep["fuel"]["per_lap"]
+    assert client.get("/api/preps").json()[0]["id"] == prep["id"]
+    _drive(eng, 2.3)                                                  # my own fuel per lap (demo ~3.1 L)
+    src = client.get("/api/race/sources").json()["teammate"]
+    assert src and src["id"] == prep["id"] and src["fuel_per_lap"] == prep["fuel"]["per_lap"]
+    r = client.post(f"/api/prep/{prep['id']}/fuel", json={"target": "eco"}).json()
+    assert (r.get("active") and r["save_per_lap"] > 0) or r.get("already")
+    if r.get("active"):
+        assert eng.fuel_save and eng.fuel_target_per_lap() == pytest.approx(r["goal"], abs=0.02)
+    ref = client.post("/api/live/reference", json={"lap": "local:" + prep["files"]["eco"]}).json()
+    assert "fuel-save" in ref["reference"]
+    assert client.post("/api/prep/nope/fuel", json={}).status_code == 404
