@@ -1048,9 +1048,18 @@ class LiveEngine:
             info["traffic_s"], info["traffic_lost"] = t["traffic_s"], t.get("lost_s")
             if buf.valid and not t["in_traffic"]:
                 self._clean_times.append(lap.time.copy())
+        fuel_over = None
+        if self.fuel_save and fuel_used and self.config.on("endurance"):     # before consistency: it uses this
+            goal = self.fuel_target_per_lap()
+            if goal:
+                ok = buf.valid and fuel_used <= goal + 0.02
+                info["fuel_ok"] = ok
+                fuel_over = round(fuel_used - goal, 2) if not ok else None
+                self._game_event("fuel_lap", ok=ok)
         if self.config.on("consistency") and self.consistency.active and not self.race_mode:
             res = self.consistency.add_lap(lap_time, buf.valid,
-                                           (self.last_comparison or {}).get("corners") if self.reference else None)
+                                           (self.last_comparison or {}).get("corners") if self.reference else None,
+                                           fuel_ok=info.get("fuel_ok"), fuel_over=fuel_over)
             phrase = self.consistency.spoken(res) if res else None
             if phrase:
                 self.coach._say(phrase, important=True)
@@ -1062,12 +1071,6 @@ class LiveEngine:
                     if p.get("consistency") and p["status"] == "active":
                         self.coach.finish_step(p)
             info["consistency"] = None if not res else {"inside": res.get("inside"), "delta": res.get("delta")}
-        if self.fuel_save and fuel_used and self.config.on("endurance"):
-            goal = self.fuel_target_per_lap()
-            if goal:
-                ok = buf.valid and fuel_used <= goal + 0.02
-                info["fuel_ok"] = ok
-                self._game_event("fuel_lap", ok=ok)
         if self.race_rec.active and self.is_race:
             self.race_rec.add_lap({"lap": self.lap_count, "lap_time": round(lap_time, 3), "valid": buf.valid,
                                    "pit": buf.pit, "fuel_used": fuel_used, "fuel_ok": info.get("fuel_ok"),

@@ -107,7 +107,7 @@
     { id: "free", ic: "🚗", n: "Free driving", d: "Just the live delta", f: null, wide: true },
   ];
   const NAMES = Object.fromEntries(MODES.map((m) => [m.id, m.n]));
-  let st = null, sel = null, opt = { minutes: 45, corner: "", kind: "", window: 0.3, goal: 5, fuel_mode: "extra_lap" };
+  let st = null, sel = null, opt = { minutes: 45, corner: "", kind: "", window: 0.3, goal: 5, fuel_mode: "extra_lap", faster_ok: 1 };
   let lastSig = "", last = {};
 
   const say = (t, cls) => { $("msg").textContent = t || ""; $("msg").className = "msg" + (cls ? " " + cls : ""); };
@@ -145,7 +145,11 @@
         ${corners.length ? "" : `<p class="msg">Drive a lap against a reference so the corners show up here.</p>`}`;
     } else if (sel === "consistency") {
       o.innerHTML = `<label>Window</label>${chips("window", [0.2, 0.3, 0.5], (v) => "±" + v + " s")}
-        <label>Laps in a row</label>${chips("goal", [5, 10, 15])}`;
+        <label>Laps in a row</label>${chips("goal", [5, 10, 15])}
+        <label>Faster laps</label><div class="chips">
+          <button class="chip ${opt.faster_ok ? "sel" : ""}" data-opt="faster_ok" data-val="1">Count (race pace)</button>
+          <button class="chip ${!opt.faster_ok ? "sel" : ""}" data-opt="faster_ok" data-val="0">Strict window</button></div>
+        <p class="msg">With fuel saving on, a faster lap only counts if it also hit the fuel target.</p>`;
     } else if (sel === "fuel") {
       o.innerHTML = `<label>Goal</label><div class="chips">
         <button class="chip ${opt.fuel_mode === "extra_lap" ? "sel" : ""}" data-opt="fuel_mode" data-val="extra_lap">+1 lap on this tank</button>
@@ -229,7 +233,7 @@
     const p = { mode: sel };
     if (sel === "plan") p.minutes = opt.minutes;
     if (sel === "drill") { if (opt.corner !== "") p.corner = +opt.corner; if (opt.kind) p.kind = opt.kind; }
-    if (sel === "consistency") { p.window = opt.window; p.goal = opt.goal; }
+    if (sel === "consistency") { p.window = opt.window; p.goal = opt.goal; p.faster_ok = !!opt.faster_ok; }
     if (sel === "fuel") { p.fuel_mode = opt.fuel_mode; if (opt.fuel_mode === "target") p.save_per_lap = 0.1; }
     select(p);
   });

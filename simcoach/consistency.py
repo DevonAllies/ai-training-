@@ -2,7 +2,12 @@
 
 Pick a target lap time (or let the trainer suggest ~99 % of your recent pace)
 and a window (e.g. +/-0.3 s). Every lap lands inside or outside the window;
-the overlay shows the streak and the voice calls it. When a lap falls out, the
+the overlay shows the streak and the voice calls it.
+
+Faster is fine (default): a lap quicker than the window still counts - race pace
+only punishes slow laps. With fuel saving on, a faster lap counts only if it also
+hit the fuel target (not bought with extra fuel). Three faster laps in a row move
+the target down to your new pace. When a lap falls out, the
 trainer compares it with *your own usual lap* (the median of your recent laps,
 not the reference) and names the corner and the habit that changed, e.g.
 "T3: braked 12 m earlier than usual".
@@ -35,10 +40,16 @@ class ConsistencyTrainer:
         self.completed = False
         self.laps: list[dict] = []             # {lap_time, inside, delta, corners:[{metrics}], why}
         self.message = ""
+        self.faster_ok = True                  # laps faster than the window count
+        self._fast_run: list[float] = []       # consecutive faster laps (to move the target)
 
     # ------------------------------------------------------------- control
-    def start(self, target: float | None = None, window: float | None = None, goal: int | None = None) -> dict:
+    def start(self, target: float | None = None, window: float | None = None, goal: int | None = None,
+              faster_ok: bool | None = None) -> dict:
         self.active = True
+        if faster_ok is not None:
+            self.faster_ok = bool(faster_ok)
+        self._fast_run = []
         self.target = target
         self.auto_target = target is None
         if window:
@@ -56,8 +67,10 @@ class ConsistencyTrainer:
         self.active = False
 
     # ------------------------------------------------------------ per lap
-    def add_lap(self, lap_time: float, valid: bool, corners: list[dict] | None) -> dict | None:
-        """Judge a completed lap. Returns the result (or None when not active / lap not counted)."""
+    def add_lap(self, lap_time: float, valid: bool, corners: list[dict] | None,
+                fuel_ok: bool | None = None, fuel_over: float | None = None) -> dict | None:
+        """Judge a completed lap. Returns the result (or None when not active / lap not counted).
+        fuel_ok: in fuel-save mode, whether the lap hit the fuel target (None = not fuel saving)."""
         if not self.active or not valid or lap_time <= 0:
             return None
         corners = corners or []
@@ -73,21 +86,48 @@ class ConsistencyTrainer:
                 self.message = f"Target set from your pace: {self.target:.3f}s ±{self.window:.2f}s."
             return {"inside": None, "target_set": self.target}
         delta = lap_time - self.target
-        inside = abs(delta) <= self.window
-        why = None if inside else self._why(rec)
+        faster = delta < -self.window
+        retarget = None
+        fuel_miss = False
+        if faster and self.faster_ok:
+            if fuel_ok is False:                   # quicker, but only by burning more fuel
+                inside, fuel_miss = False, True
+            else:
+                inside = True
+                self._fast_run.append(lap_time)
+                if len(self._fast_run) >= 3:       # you've found real pace: judge against it now
+                    retarget = round(statistics.median(self._fast_run[-3:]), 3)
+                    self.target = retarget
+                    self._fast_run = []
+        else:
+            inside = abs(delta) <= self.window
+            if not faster:
+                self._fast_run = []
+        if fuel_miss:
+            over = f"{fuel_over:.2f} L " if fuel_over else ""
+            why = {"corner": None, "spoken": None, "cost": 0.0, "habit": None, "fuel": True,
+                   "text": f"Faster, but {over}over the fuel target - it has to be fast on the same fuel."}
+        else:
+            why = None if inside else self._why(rec)
         self.streak = self.streak + 1 if inside else 0
         self.best_streak = max(self.best_streak, self.streak)
-        rec.update(inside=inside, delta=round(delta, 3), why=why)
+        rec.update(inside=inside, delta=round(delta, 3), why=why, faster=faster and inside)
         self.laps.append(rec)
         self._trim()
         if self.streak >= self.goal and not self.completed:
             self.completed = True
             self.message = f"Goal reached: {self.goal} laps in a row inside ±{self.window:.2f}s!"
+        elif retarget:
+            self.message = (f"Three faster laps in a row - new target {retarget:.3f}s ±{self.window:.2f}s. "
+                            f"{self.streak} in a row.")
+        elif inside and faster:
+            self.message = f"Faster ({delta:+.2f}s) - still counts. {self.streak} in a row."
         elif inside:
             self.message = f"In the window ({delta:+.2f}s) - {self.streak} in a row."
         else:
             self.message = f"Outside ({delta:+.2f}s)." + (f" {why['text']}" if why else "")
-        return {"inside": inside, "delta": delta, "streak": self.streak, "why": why, "completed": self.completed}
+        return {"inside": inside, "delta": delta, "streak": self.streak, "why": why, "completed": self.completed,
+                "faster": faster and inside, "retarget": retarget, "fuel_miss": fuel_miss}
 
     def _trim(self):
         del self.laps[:-MAX_LAPS]
@@ -138,11 +178,12 @@ class ConsistencyTrainer:
         judged = [l for l in self.laps if l.get("inside") is not None]
         times = [l["lap_time"] for l in judged]
         return {"active": self.active, "target": self.target, "auto_target": self.auto_target,
+                "faster_ok": self.faster_ok,
                 "window": self.window, "goal": self.goal, "streak": self.streak, "best_streak": self.best_streak,
                 "completed": self.completed, "message": self.message, "score": self.score(),
                 "laps": len(judged), "inside": sum(1 for l in judged if l["inside"]),
                 "stdev": round(statistics.pstdev(times), 3) if len(times) > 1 else None,
-                "recent": [{k: l.get(k) for k in ("lap_time", "inside", "delta")} | {"why": (l.get("why") or {}).get("text")}
+                "recent": [{k: l.get(k) for k in ("lap_time", "inside", "delta", "faster")} | {"why": (l.get("why") or {}).get("text")}
                            for l in self.laps[-12:]]}
 
     def spoken(self, res: dict) -> str | None:
@@ -150,8 +191,14 @@ class ConsistencyTrainer:
             return "Target set" if res and res.get("target_set") else None
         if res.get("completed") and res["streak"] == self.goal:
             return f"Goal reached. {self.goal} laps in the window"
+        if res.get("retarget"):
+            return f"New pace. Target {res['retarget']:.1f}"
+        if res["inside"] and res.get("faster"):
+            return f"Faster, still counts. {res['streak']} in a row"
         if res["inside"]:
             return f"In the window, {res['streak']} in a row"
+        if res.get("fuel_miss"):
+            return "Faster, but over the fuel target"
         w = res.get("why")
         tail = f". {w['spoken']} cost {w['cost']:.1f}" if w else ""
         return f"Outside, {'plus' if res['delta'] > 0 else 'minus'} {abs(res['delta']):.1f}{tail}"

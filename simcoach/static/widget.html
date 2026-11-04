@@ -107,7 +107,7 @@
   function consistency(s) {
     const c = s.consistency || {};
     const goal = c.goal || 5, streak = c.streak || 0;
-    const dots = (c.recent || []).map((l) => `<i class="${l.inside == null ? "na" : l.inside ? "in" : "out"}" title="${esc(l.why || "")}">${l.delta == null ? "" : (l.delta > 0 ? "+" : "") + l.delta.toFixed(1)}</i>`).join("");
+    const dots = (c.recent || []).map((l) => `<i class="${l.inside == null ? "na" : l.faster ? "in fast" : l.inside ? "in" : "out"}" title="${esc(l.why || "")}">${l.delta == null ? "" : (l.delta > 0 ? "+" : "") + l.delta.toFixed(1)}</i>`).join("");
     const last = (c.recent || []).slice(-1)[0];
     return `<div class="g-ring" style="--p:${Math.min(100, (100 * streak) / goal)}"><div><div><b class="${c.completed ? "good" : ""}">${streak}</b><div class="k">of ${goal} in a row</div></div></div></div>
       <div style="text-align:center;margin-top:10px">
@@ -119,7 +119,7 @@
         <div class="g-tile"><div class="k">Best run</div><div class="v">${c.best_streak || 0}</div></div></div>
       <div class="msg">${esc(c.message || "")}</div>
       <div class="btns">${c.active ? btn("Stop", { mode: "free" }) :
-        btn("Start (±0.3s, 5 laps)", { mode: "consistency", window: 0.3, goal: 5 }, true) + btn("Hard (±0.2s, 10)", { mode: "consistency", window: 0.2, goal: 10 })}</div>`;
+        btn("Start (±0.3s, 5 laps)", { mode: "consistency", window: 0.3, goal: 5, faster_ok: true }, true) + btn("Hard (±0.2s, 10)", { mode: "consistency", window: 0.2, goal: 10, faster_ok: true })}</div>`;
   }
 
   function endurance(s) {

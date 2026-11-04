@@ -182,6 +182,13 @@ The Live tab's **Consistency trainer** is for race pace: the same lap, every lap
 5. **The track map** shows where you're inconsistent: red is a corner that varies more than your typical corner, green is steadier.
 6. **From the plan:** the practice plan's *Consistency run* starts the trainer with one click and ticks itself off when you reach the goal.
 
+
+**Faster laps count** (race pace; on by default):
+- A lap quicker than the window keeps the streak going; the voice says "faster, still counts".
+- With fuel saving on, a faster lap counts only if it also hit the fuel target. If you burned extra fuel to go faster, the streak breaks and the trainer says how much you were over.
+- Three faster laps in a row move the target down to your new pace.
+- Untick **Faster laps count** for the strict two-sided window.
+
 ## Weekly training goal and streak
 
 At the top of the **Progress** tab you can set a weekly goal: **minutes on track** (default 3 hours), **sessions** or **laps** per week.

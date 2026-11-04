@@ -533,6 +533,10 @@ function parseLapTime(s) {
   const m = s.match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
   return m ? (+(m[1] || 0)) * 60 + parseFloat(m[2]) : NaN;
 }
+// fetch() throws a TypeError ("NetworkError…" / "Failed to fetch") when SimCoach didn't answer at all
+const netMsg = (e) => e instanceof TypeError
+  ? "SimCoach isn't responding – it may be restarting (for example after an update). Wait a few seconds, refresh the page and try again."
+  : e.message;
 async function uploadLapFile(f) {
   const lt = parseLapTime($("#tm-laptime").value);
   if (Number.isNaN(lt)) { msg($("#tm-msg"), "Lap time format: 1:29.307", "err"); return; }
@@ -554,7 +558,7 @@ async function uploadLapFile(f) {
             <button class="small" data-i="${l.index}">Save only</button></td></tr>`).join("");
     $("#tm-laps").classList.remove("hidden");
     $("#tm-prep-row").classList.toggle("hidden", d.laps.length < 2);
-  } catch (e) { msg($("#tm-msg"), e.message, "err"); }
+  } catch (e) { msg($("#tm-msg"), netMsg(e), "err"); }
 }
 $("#tm-prep").addEventListener("click", async () => {
   if (!tm.upload) return;
@@ -1082,7 +1086,7 @@ function renderConsistency(c) {
       · best streak ${c.best_streak} · ${c.inside}/${c.laps} inside${c.stdev != null ? ` · ±${c.stdev.toFixed(2)}s spread` : ""}</div>
     <div style="margin-top:4px">${esc(c.message || "")}</div>
     <ul class="ct-laps">${(c.recent || []).slice().reverse().map((l) => l.inside == null ? `<li class="muted">${fmtTime(l.lap_time)} (setting target)</li>` :
-      `<li><span class="sev ${l.inside ? "good" : "bad"}"></span>${fmtTime(l.lap_time)} <b class="${l.inside ? "neg" : "pos"}">${fmtDelta(l.delta)}</b> ${l.why ? "– " + esc(l.why) : ""}</li>`).join("")}</ul>`;
+      `<li><span class="sev ${l.inside ? "good" : "bad"}"></span>${fmtTime(l.lap_time)} <b class="${l.inside ? "neg" : "pos"}">${fmtDelta(l.delta)}</b>${l.faster ? ' <span class="muted">faster – counts</span>' : ""} ${l.why ? "– " + esc(l.why) : ""}</li>`).join("")}</ul>`;
   drawConsistencyMap();
 }
 async function drawConsistencyMap() {
@@ -1099,7 +1103,7 @@ async function drawConsistencyMap() {
 $("#ct-start").addEventListener("click", async () => {
   const t = parseLapTime($("#ct-target").value);
   if (Number.isNaN(t)) { alert("Target format: 1:29.500 (or leave empty)"); return; }
-  try { await api("/api/consistency/start", { method: "POST", body: { target: t, window: parseFloat($("#ct-window").value), goal: parseInt($("#ct-goal").value, 10) } }); }
+  try { await api("/api/consistency/start", { method: "POST", body: { target: t, window: parseFloat($("#ct-window").value), goal: parseInt($("#ct-goal").value, 10), faster_ok: $("#ct-faster").checked } }); }
   catch (e) { alert(e.message); }
 });
 $("#ct-stop").addEventListener("click", () => api("/api/consistency/stop", { method: "POST" }));
@@ -1249,7 +1253,7 @@ $("#prep-file").addEventListener("change", async (e) => {
     const d = await r.json(); if (!r.ok) throw new Error(d.detail || "Upload failed");
     const p = await api("/api/prep/from_upload", { method: "POST", body: { upload_id: d.upload_id } });
     state.prepId = p.id; msg($("#prep-msg"), `Race prep built from ${p.lap_count} laps of ${p.driver}.`, "ok"); loadPreps();
-  } catch (err) { msg($("#prep-msg"), err.message, "err"); }
+  } catch (err) { msg($("#prep-msg"), netMsg(err), "err"); }
 });
 $("#prep-view").addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-prep]"); const p = state.prep; if (!b || !p) return;

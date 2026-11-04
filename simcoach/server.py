@@ -90,6 +90,7 @@ class ConsistencyIn(BaseModel):
     target: float | None = None        # lap time in seconds; None = set from your pace
     window: float | None = None
     goal: int | None = None
+    faster_ok: bool | None = None      # laps faster than the window count (default on)
 
 
 class FocusIn(BaseModel):
@@ -106,6 +107,7 @@ class TrainingIn(BaseModel):
     kind: str | None = None            # drill: drill type
     window: float | None = None        # consistency
     goal: int | None = None
+    faster_ok: bool | None = None      # consistency: faster laps count
     fuel_mode: str = "extra_lap"       # fuel: "extra_lap" | "target"
     save_per_lap: float | None = None
 
@@ -1044,7 +1046,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             engine.stop_training(keep_fuel=True)
         elif mode == "consistency":
             engine.stop_training()
-            consistency_start(ConsistencyIn(window=body.window, goal=body.goal))
+            consistency_start(ConsistencyIn(window=body.window, goal=body.goal, faster_ok=body.faster_ok))
         elif mode == "drill":
             engine.stop_training()
             coach_focus(FocusIn(action="corner" if body.corner is not None else "auto",
@@ -1187,7 +1189,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
     def consistency_start(body: ConsistencyIn):
         need("consistency")
         with engine.lock:
-            st = engine.consistency.start(body.target, body.window, body.goal)
+            st = engine.consistency.start(body.target, body.window, body.goal, body.faster_ok)
         engine.coach._say("Consistency run. Same lap, every lap", important=True)
         return st
 

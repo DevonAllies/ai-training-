@@ -1435,3 +1435,30 @@ def test_race_prep_api_planner_fuel_training_and_reference(tmp_path, monkeypatch
     ref = client.post("/api/live/reference", json={"lap": "local:" + prep["files"]["eco"]}).json()
     assert "fuel-save" in ref["reference"]
     assert client.post("/api/prep/nope/fuel", json={}).status_code == 404
+
+
+# ------------------------------------------------- consistency: faster laps count (unless fuel was burned)
+def test_consistency_faster_laps_count_and_fuel_gate():
+    from simcoach.consistency import ConsistencyTrainer
+    ct = ConsistencyTrainer()
+    ct.start(90.0, 0.3, 10)
+    assert ct.add_lap(90.1, True, None)["inside"]                      # in the window
+    r = ct.add_lap(89.4, True, None)                                     # 0.6 s faster -> still counts
+    assert r["inside"] and r["faster"] and ct.streak == 2 and "still counts" in ct.message
+    assert "Faster, still counts" in ct.spoken(r)
+    r = ct.add_lap(90.5, True, None)                                     # slower than the window -> breaks it
+    assert not r["inside"] and ct.streak == 0
+    # fuel saving on: faster but over the fuel target -> doesn't count
+    r = ct.add_lap(89.3, True, None, fuel_ok=False, fuel_over=0.15)
+    assert not r["inside"] and r["fuel_miss"] and "0.15 L over the fuel target" in r["why"]["text"]
+    assert ct.spoken(r) == "Faster, but over the fuel target"
+    # faster and on fuel target -> counts
+    assert ct.add_lap(89.5, True, None, fuel_ok=True)["inside"]
+    # three faster laps in a row move the target to the new pace
+    ct.add_lap(89.4, True, None, fuel_ok=True)
+    r = ct.add_lap(89.45, True, None, fuel_ok=True)
+    assert r["retarget"] == 89.45 and ct.target == 89.45 and ct.streak == 3
+    assert ct.add_lap(89.6, True, None)["inside"] and not ct.status()["recent"][-1]["faster"]
+    # strict mode: the old two-sided window
+    ct.start(90.0, 0.3, 5, faster_ok=False)
+    assert not ct.add_lap(89.4, True, None)["inside"]
