@@ -1086,3 +1086,52 @@ def test_training_hub_select_from_phone_and_widgets():
     assert phone.get("/api/game").status_code == 409 and eng.overlay()["game"] is None
     phone.post("/api/features", json={"features": {"game": True}})
     assert eng.overlay()["game"]["level"] >= 1
+
+
+# ------------------------------------------------- v12: racing line without live GPS
+def test_racing_line_rebuilt_from_heading_and_speed():
+    """iRacing has no Lat/Lon live - the line is rebuilt from heading, speed and slip angle."""
+    from simcoach.control import _xy, aligned_latlon, line_offset
+    from simcoach.live import LapBuffer
+    ref = demo.reference_lap()
+    bump = lambda g: 3.0 * np.exp(-((g - 0.3) / 0.015) ** 2)   # noqa: E731 - 3 m wide at 30 % of the lap
+    # slip angle: heading points inside the corner; velocity vector carries the slip
+    def drive_slip(ref, offset_fn, slip_sign):
+        rx, ry = _xy(ref.lat, ref.lon, ref.lat.mean(), ref.lon.mean())
+        tx, ty = np.gradient(np.r_[rx[-1], rx, rx[0]])[1:-1], np.gradient(np.r_[ry[-1], ry, ry[0]])[1:-1]
+        n = np.hypot(tx, ty); nx, ny = -ty / n, tx / n
+        off = offset_fn(GRID); mx, my = rx + nx * off, ry + ny * off
+        pts = 20 * N_BINS
+        pp = np.linspace(0, 1, pts, endpoint=False)
+        X = np.r_[np.interp(pp, GRID, mx, period=1), mx[0]]; Y = np.r_[np.interp(pp, GRID, my, period=1), my[0]]
+        pp = np.r_[pp, 1.0]
+        ds = np.hypot(np.diff(X), np.diff(Y)); v = np.interp(pp[:-1], GRID, ref.speed, period=1)
+        travel = np.unwrap(np.arctan2(np.diff(Y), np.diff(X)))
+        curv = np.gradient(travel) / np.maximum(ds, 1e-6)
+        beta = np.clip(0.9 * curv * 25, -0.08, 0.08)          # up to ~4.5 deg, nose pointing inside
+        heading = travel + beta
+        vxs, vys = v * np.cos(beta), slip_sign * -v * np.sin(beta)
+        steer = np.interp(pp[:-1], GRID, ref.steer, period=1)
+        buf = LapBuffer(0.0); t = 0.0
+        for i in range(len(ds)):
+            buf.add({"pct": pp[i], "speed": v[i], "throttle": 0, "brake": 0, "gear": 3, "steer": steer[i],
+                     "session_time": t, "on_pit_road": False, "surface": 3, "heading": heading[i] + 0.4,
+                     "vx": vxs[i], "vy": vys[i]})
+            t += ds[i] / v[i]
+        lap = buf.to_lap(ref.track_length); lap.meta = {"line": "reconstructed"}
+        return lap, off, beta
+
+    for sign in (1, -1):                                       # slip sign convention doesn't matter
+        lap, off, beta = drive_slip(ref, bump, sign)
+        assert lap.has_map() and lap.meta["line"] == "reconstructed"
+        lo = line_offset(lap, ref)
+        err = lo["offset"] - off
+        assert abs(lo["offset"][300] - 3.0) < 0.5 and float(np.sqrt(np.mean(err ** 2))) < 0.4
+    ll = aligned_latlon(lap, ref)                              # drawn in the reference's frame
+    assert ll is not None and abs(float(np.mean(ll[0])) - float(np.mean(ref.lat))) < 1e-4
+    # a buffer without heading (old data) still has no line
+    buf = LapBuffer(0.0)
+    for i in range(2001):
+        buf.add({"pct": i / 2001, "speed": 50, "throttle": 1, "brake": 0, "gear": 4, "steer": 0,
+                 "session_time": i * 0.04, "on_pit_road": False, "surface": 3})
+    assert not buf.to_lap(4200).has_map()

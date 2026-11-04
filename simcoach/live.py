@@ -107,6 +107,9 @@ class IRacingSource(TelemetrySource):
                 surface=int(ir["PlayerTrackSurface"]),   # 0 = off track, 3 = on track
                 last_lap_time=float(ir["LapLastLapTime"] or 0.0),
                 yaw=_f(ir["YawRate"]),
+                heading=_f(ir["Yaw"]),                          # world heading - rebuilds the line live
+                vx=_f(ir["VelocityX"]),                         # car-frame velocity -> slip angle
+                vy=_f(ir["VelocityY"]),
                 latacc=_f(ir["LatAccel"]),
                 rpm=_f(ir["RPM"]),
                 abs=_f(ir["BrakeABSactive"]),
@@ -236,7 +239,7 @@ class LapBuffer:
     """Fills the distance grid as samples arrive."""
 
     CH = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon", "time",
-          "yaw", "latacc", "rpm", "abs", "fuel")
+          "yaw", "latacc", "rpm", "abs", "fuel", "px", "py", "qx", "qy")
 
     def __init__(self, start_session_time: float | None):
         self.start = start_session_time
@@ -247,6 +250,7 @@ class LapBuffer:
         self.max_bin = -1
         self.pit = False                 # lap touched the pit lane
         self.fuel_start: float | None = None
+        self.dead_reckoned = False       # line rebuilt from heading + speed (no live GPS)
 
     def add(self, s: dict) -> None:
         if s["on_pit_road"] or s["surface"] == 0:
@@ -260,6 +264,26 @@ class LapBuffer:
             return
         s = dict(s, time=s["session_time"] - self.start)
         p0 = self.prev
+        if s.get("heading") is not None and not s.get("lat"):
+            # iRacing has no GPS in live telemetry: integrate speed along the direction of travel
+            # (heading + slip angle). The slip sign isn't documented, so both are integrated
+            # (p = +slip, q = -slip) and the path that closes its loop better is used.
+            vx, vy = s.get("vx") or 0.0, s.get("vy") or 0.0
+            beta = math.atan2(vy, vx) if vx > 3.0 else 0.0
+            s["beta"] = max(-0.4, min(0.4, beta))
+            if p0 is None or "px" not in p0:
+                s["px"] = s["py"] = s["qx"] = s["qy"] = 0.0
+            else:
+                dt = s["time"] - p0["time"]
+                ds = 0.5 * (p0["speed"] + s["speed"]) * dt if 0 < dt < 0.5 else 0.0
+                h0, h1 = p0.get("heading", s["heading"]), s["heading"]
+                b0, b1 = p0.get("beta", 0.0), s["beta"]
+                for kx, ky, sg in (("px", "py", 1.0), ("qx", "qy", -1.0)):
+                    a0, a1 = h0 + sg * b0, h1 + sg * b1
+                    cx, cy = math.cos(a0) + math.cos(a1), math.sin(a0) + math.sin(a1)
+                    n = math.hypot(cx, cy) or 1.0
+                    s[kx], s[ky] = p0[kx] + ds * cx / n, p0[ky] + ds * cy / n
+            self.dead_reckoned = True
         self.prev = s
         if p0 is None or "time" not in p0:
             return
@@ -287,6 +311,11 @@ class LapBuffer:
         def opt(k):                                   # extra channels: None if the source never sent them
             a = arr[k]
             return a if np.any(a != 0) else None
+        if self.dead_reckoned and not np.any(arr["lat"]):
+            from .control import reconstructed_latlon
+            ll = reconstructed_latlon(arr["px"], arr["py"], arr["steer"], arr["qx"], arr["qy"])
+            if ll is not None:
+                arr["lat"], arr["lon"] = ll
         return Lap(speed=np.clip(arr["speed"], 0.5, None), throttle=arr["throttle"],
                    brake=arr["brake"], time=np.maximum.accumulate(arr["time"]), gear=arr["gear"],
                    steer=arr["steer"], lat=arr["lat"], lon=arr["lon"], yaw=opt("yaw"),
@@ -821,6 +850,8 @@ class LiveEngine:
             "source": "live",
             "fuel_used": fuel_used,
         }
+        if buf.dead_reckoned and lap.has_map():
+            lap.meta["line"] = "reconstructed"
         self.last_lap = lap
         info = {"lap_time": round(lap_time, 3), "valid": buf.valid, "label": lap.label, "file": None,
                 "sectors": [x["time"] for x in self.cur_sectors], "fuel_used": fuel_used}

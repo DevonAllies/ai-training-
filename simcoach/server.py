@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from . import __version__, corners as cmap, demo, sessions
 from .analysis import compare_laps, detect_corners
+from .control import aligned_latlon
 from .config import Config, cache_dir, laps_dir
 from .garage61 import Garage61Client, Garage61Error, _tokens, describe_lap
 from .lap import Lap, fmt_time, parse_csv
@@ -582,12 +583,14 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             if last is not None and ref is not None and idx is not None and idx < len(corners):
                 k = corners[idx]
                 a, b = max(0, k.start - 25), min(len(ref.speed), k.end + 25)
-                seg = lambda arr: None if arr is None else [round(float(x), 6) for x in arr[a:b]]  # noqa: E731
+                seg = lambda arr: None if arr is None else [round(float(x), 8) for x in arr[a:b]]  # noqa: E731
+                ll = aligned_latlon(last, ref)
+                me_lat, me_lon = ll if ll is not None else (last.lat, last.lon)
                 d["trace"] = {"start": a, "apex": k.apex - a, "me_speed": seg(last.speed), "ref_speed": seg(ref.speed),
                               "me_brake": seg(last.brake), "ref_brake": seg(ref.brake),
                               "me_throttle": seg(last.throttle), "ref_throttle": seg(ref.throttle),
-                              "me_lat": seg(last.lat) if last.has_map() else None,
-                              "me_lon": seg(last.lon) if last.has_map() else None,
+                              "me_lat": seg(me_lat) if ll is not None else None,
+                              "me_lon": seg(me_lon) if ll is not None else None,
                               "ref_lat": seg(ref.lat) if ref.has_map() else None,
                               "ref_lon": seg(ref.lon) if ref.has_map() else None}
             details.append(d)
@@ -764,8 +767,12 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         ref_lap = load_lap(ref)
         corners = named_corners(ref_lap)
         cmp = compare_laps(me_lap, ref_lap, corners, config.units)
+        me_json = me_lap.to_json()
+        ll = aligned_latlon(me_lap, ref_lap)           # live laps: rebuilt line fitted onto the reference
+        if ll is not None:
+            me_json["lat"], me_json["lon"] = [round(float(x), 8) for x in ll[0]], [round(float(x), 8) for x in ll[1]]
         return {
-            "me": me_lap.to_json(),
+            "me": me_json,
             "ref": ref_lap.to_json(),
             "comparison": cmp.to_dict(),
             "corners": [cmap.corner_dict(c) for c in corners],

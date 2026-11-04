@@ -252,14 +252,16 @@
         <div id="map-none" class="muted hidden">No GPS data in these laps.</div>
       </div>
       <div class="card wide" id="line-card">
-        <div class="label">Racing line vs reference <span class="muted">(+ = left of the reference line, metres)</span></div>
+        <div class="label">Racing line vs reference (ideal) line <span class="muted">(+ = left of the reference line, metres)</span></div>
+        <div id="line-rebuilt" class="muted small-text hidden">Your line is rebuilt from heading, speed and slip angle (iRacing doesn't send GPS live), fitted onto the reference – accurate to about half a metre.</div>
         <canvas id="c-line" height="140"></canvas>
         <div class="analyze-grid" style="margin-top:10px">
           <div><div class="label">Lines – click a corner below to zoom</div><canvas id="c-lines" height="320"></canvas>
             <div class="legend"><span class="sw me"></span>You <span class="sw ref"></span>Reference</div></div>
           <div><div class="label">Car control &amp; gears</div><div id="cc-summary"></div></div>
         </div>
-        <div id="line-none" class="muted hidden">No GPS (Lat/Lon) in one of these laps – racing line comparison needs it.</div>
+        <div id="line-none" class="muted hidden">No line data in one of these laps. Laps you drive with SimCoach 0.8 or newer have it; laps recorded earlier don't.
+          For a teammate's or Garage 61 lap without a line, upload its .ibt file instead – .ibt files include GPS.</div>
       </div>
       <div class="card wide">
         <div class="label">Corner by corner</div>

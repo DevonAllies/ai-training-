@@ -673,6 +673,7 @@ function renderComparison(r) {
   };
   const hasLine = !!(c.line && me.lat && ref.lat);
   $("#line-none").classList.toggle("hidden", hasLine);
+  $("#line-rebuilt").classList.toggle("hidden", !(hasLine && ((me.meta || {}).line === "reconstructed" || (ref.meta || {}).line === "reconstructed")));
   $("#c-line").classList.toggle("hidden", !hasLine);
   $("#c-lines").parentElement.parentElement.classList.toggle("hidden", !hasLine);
   state.lineZoom = null;
