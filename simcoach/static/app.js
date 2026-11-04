@@ -40,6 +40,7 @@ function showTab(name) {
   if (name === "corners") initCorners();
   if (name === "race") refreshRace();
   if (name === "progress") { initProgress(); loadGoal(); loadGame(); }
+  if (name === "race") loadRaceReports();
 }
 
 // ------------------------------------------------------------ live
@@ -931,6 +932,7 @@ async function loadSettings() {
   $("#s-voice").value = c.voice_mode || "full";
   $("#s-update").value = c.update_mode || "auto";
   $("#s-lan").checked = !!c.lan_access;
+  $("#s-race-mode").checked = c.race_mode !== false;
   loadFeatureToggles();
   refreshLan();
   refreshUpdate();
@@ -949,6 +951,7 @@ $("#btn-save").addEventListener("click", async () => {
     voice_practice_only: $("#s-voice-practice").checked,
     update_mode: $("#s-update").value,
     lan_access: $("#s-lan").checked,
+    race_mode: $("#s-race-mode").checked,
     ...(document.querySelector("#s-autostart-row").classList.contains("hidden") ? {} : { start_with_windows: $("#s-autostart").checked }),
     focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
@@ -1161,3 +1164,14 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
   loadGoal();
   connectWS();
 })();
+
+// ------------------------------------------------------------ race reports
+async function loadRaceReports() {
+  const sel = $("#rr-list"); if (!sel) return;
+  const list = await api("/api/race_reports").catch(() => []);
+  sel.innerHTML = `<option value="">Latest race</option>` + list.map((r) =>
+    `<option value="${esc(r.id)}">${esc((r.date || "").replace("T", " "))} · ${esc(r.track || "")}${r.finish ? " · P" + r.finish.pos : ""}</option>`).join("");
+}
+$("#rr-list") && $("#rr-list").addEventListener("change", (e) => {
+  $("#rr-open").href = "/race-report" + (e.target.value ? "?id=" + encodeURIComponent(e.target.value) : "");
+});

@@ -214,6 +214,22 @@ Small single-purpose pages for a phone, tablet, second monitor or OBS browser so
 
 Add `?transparent=1` for OBS, or `?readonly=1` to hide the buttons.
 
+## Race mode and race report
+
+In race sessions SimCoach switches the training off: no corner calls, brake cues, drills, consistency trainer or game pop-ups. You keep the delta, fuel, fuel-save lift cues and faster-car warnings. Race mode is on by default; switch it off in Settings to keep training on in races. In races the overlay only shows if the overlay is set to **Always** (the default is practice only), and then as the stripped race version.
+
+It also records a **race report**. Open it from the Race tab or the phone training page (`/race-report`). It updates live during the race and can be printed or saved as PDF. It covers:
+
+- **Result:** start and finish position, overall and in class, plus your position on every lap.
+- **Pace and consistency:** best and typical lap, spread, the share of laps within 0.5 s of your typical lap, and the laps more than 1 s off.
+- **Stints:** laps, average and best, pace drop-off per lap (tyre wear; mistakes are left out of the trend) and fuel per lap.
+- **Tyres:** wear and carcass temperatures for each corner of the car, and wear per lap per stint. iRacing only sends tyre data while you're stopped in your pit stall, so this needs a pit stop; without one, the pace drop-off stands in for tyre wear.
+- **Fuel:** per lap, total, fuel left (spare-fuel advice only once the chequered flag is out), and fuel-save laps on target.
+- **Racecraft:** score, clean passes and let-bys, defending, incidents, traffic cost, and every move.
+- **Key takeaways** written from all of the above.
+
+The newest 50 race reports are kept in the `races` folder.
+
 ## Racecraft: clean passes and good racing
 
 This works with real traffic: races, iRacing AI races (great for practising traffic) and open practice. SimCoach reads every car's position on track, its class, the spotter's left/right flag and your incident count.

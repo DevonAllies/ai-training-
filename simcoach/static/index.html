@@ -278,6 +278,13 @@
 
 <!-- ============================== RACE ============================== -->
 <section id="tab-race" class="tab-page">
+  <div class="card">
+    <div class="filters">
+      <span><b>Race report</b> <span class="muted small-text">– result, consistency, stints &amp; tyres, fuel and racecraft for each race</span></span>
+      <select id="rr-list"></select>
+      <a id="rr-open" href="/race-report" target="_blank"><button class="small primary">Open race report</button></a>
+    </div>
+  </div>
   <div class="summary" id="race-cards"></div>
   <div class="analyze-grid">
     <div class="card">
@@ -459,6 +466,8 @@
     <h3>Training features</h3>
     <p class="muted">Switch off what you don't want – it disappears from the dashboard, overlay and voice.</p>
     <div id="s-features"></div>
+    <label class="check"><input id="s-race-mode" type="checkbox"> Race mode: in races, switch the training off (corner calls,
+      drills, consistency trainer, game pop-ups) and record a race report instead</label>
     <h3>Tablet / phone</h3>
     <p class="muted">Use a tablet or phone next to your rig as a second screen. It must be on the same home Wi-Fi.
       Devices on your network can use the coaching screens but can't change settings or delete anything.</p>

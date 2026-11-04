@@ -50,6 +50,7 @@ class TokenIn(BaseModel):
     features: dict | None = None
     goal_type: str | None = None
     goal_value: float | None = None
+    race_mode: bool | None = None
 
 
 class CornerMapIn(BaseModel):
@@ -309,6 +310,8 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         if body.goal_value is not None:
             config.goal_value = max(1.0, min(10000.0, float(body.goal_value)))
             engine._goal_announced = False
+        if body.race_mode is not None:
+            config.race_mode = body.race_mode
         if body.features is not None:
             apply_features(body.features)
         if body.start_with_windows is not None:
@@ -972,6 +975,7 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             rep = engine.coach.report()
             st = {
                 "mode": engine.training_mode(),
+                "race_mode": engine.race_mode,
                 "features": dict(config.features),
                 "feature_labels": FEATURES,
                 "plan": engine.coach.plan,
@@ -1038,6 +1042,33 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         need("traffic")
         with engine.lock:
             return engine.traffic.status()
+
+    @app.get("/race-report")
+    def race_report_page():
+        return FileResponse(STATIC / "race_report.html")
+
+    @app.get("/api/race_report")
+    def race_report(id: str = ""):
+        """The race in progress (or the last one this run), or a saved race by id."""
+        from . import race_report as rr
+        if id:
+            try:
+                return rr.load_report(id)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(404, "No such race report") from exc
+        with engine.lock:
+            if engine.race_rec.active and engine.race_rec.laps:
+                return dict(engine.race_rec.report(engine.traffic.status() if config.on("traffic") else None),
+                            live=engine.is_race)
+        saved = rr.list_reports()
+        if not saved:
+            raise HTTPException(404, "No race yet - race reports are recorded in race sessions.")
+        return rr.load_report(saved[0]["id"])
+
+    @app.get("/api/race_reports")
+    def race_reports():
+        from . import race_report as rr
+        return rr.list_reports()
 
     @app.get("/api/game")
     def game_status():

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimCoach Race Report</title>
+<link rel="icon" href="/static/icon.png">
+<style>
+  /* Printable report: always light so it prints and reads well as a PDF */
+  :root { --bg: #ffffff; --card: #ffffff; --line: #e3e6ea; --text: #15181c; --muted: #66707c;
+          --me: #1f7ae0; --ref: #d68a00; --good: #1a9e63; --bad: #d93a3f; --accent: #1f7ae0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #eef0f3; color: var(--text); font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+  .page { max-width: 900px; margin: 16px auto; background: #fff; padding: 28px 32px; border-radius: 8px;
+          box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+  .toolbar { max-width: 900px; margin: 16px auto 0; display: flex; gap: 8px; justify-content: flex-end; padding: 0 16px; }
+  button { background: #fff; border: 1px solid #c9ced5; border-radius: 6px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid var(--text);
+           padding-bottom: 10px; margin-bottom: 16px; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; } h2 { font-size: 15px; margin: 22px 0 8px; text-transform: uppercase; letter-spacing: .5px; }
+  h3 { font-size: 14px; margin: 0 0 4px; }
+  .muted { color: var(--muted); } .small { font-size: 11px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .stat b { display: block; font: 700 18px Consolas, monospace; }
+  .grades { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; }
+  .grade { display: grid; grid-template-columns: 110px 1fr 32px; gap: 8px; align-items: center; }
+  .gbar { height: 8px; background: #edf0f3; border-radius: 4px; overflow: hidden; } .gbar div { height: 100%; }
+  ul { margin: 6px 0; padding-left: 18px; } li { margin: 3px 0; }
+  .corner { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; break-inside: avoid; }
+  .corner .row { display: grid; grid-template-columns: 1.2fr 1fr; gap: 14px; }
+  .pos { color: var(--bad); } .neg { color: var(--good); }
+  table { width: 100%; border-collapse: collapse; } td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .step { border-left: 3px solid var(--accent); padding: 5px 10px; margin: 6px 0; break-inside: avoid; }
+  .box { width: 12px; height: 12px; border: 1.5px solid var(--text); display: inline-block; margin-right: 6px; vertical-align: -1px; }
+  canvas { width: 100%; display: block; }
+  .legend { font-size: 11px; color: var(--muted); } .sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin: 0 4px 0 8px; }
+  @media print {
+    body { background: #fff; } .toolbar { display: none; }
+    .page { box-shadow: none; margin: 0; padding: 0; max-width: none; }
+  }
+  @media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } .grades, .corner .row { grid-template-columns: 1fr; } }
+  .laps-svg, .pos-svg { width: 100%; height: auto; display: block; }
+  .tk li { margin: 5px 0; }
+  .tyre { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; max-width: 360px; }
+  .tyre div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; text-align: center; }
+  .tyre b { display: block; font: 700 16px Consolas, monospace; }
+  .ev-ok { color: var(--good); } .ev-bad { color: var(--bad); }
+  .live { display: inline-block; background: var(--bad); color: #fff; border-radius: 99px; padding: 1px 8px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="history.length > 1 ? history.back() : (location.href = '/')">Back</button>
+  <button class="primary" onclick="window.print()">Print / Save as PDF</button>
+</div>
+<div class="page" id="page"><p class="muted">Loading race report…</p></div>
+<script>
+"use strict";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtT = (s) => { if (!(s > 0)) return "–"; const m = Math.floor(s / 60); return m + ":" + (s - m * 60).toFixed(3).padStart(6, "0"); };
+const n = (v, d = 2, u = "") => v == null ? "–" : (+v).toFixed(d) + u;
+const q = new URLSearchParams(location.search);
+
+function lapChart(r) {
+  const laps = r.laps || []; if (laps.length < 2) return "";
+  const racing = laps.filter((l) => l.valid && !l.pit).map((l) => l.lap_time);
+  if (!racing.length) return "";
+  const typ = r.pace.typical || racing[0], lo = Math.min(...racing) - 0.3, hi = Math.min(Math.max(...racing), typ + 4) + 0.3;
+  const W = 860, H = 200, P = 34, bw = (W - P - 6) / laps.length;
+  const y = (t) => H - 18 - ((Math.min(t, hi) - lo) / (hi - lo)) * (H - 30);
+  const bars = laps.map((l, i) => {
+    const col = l.pit ? "#b9c0c8" : !l.valid ? "#d93a3f" : l.in_traffic ? "#e09a2b" : (typ && l.lap_time - typ > 1 ? "#d93a3f" : "#1f7ae0");
+    const yy = y(l.lap_time);
+    return `<rect x="${P + i * bw + 1}" y="${yy}" width="${Math.max(1, bw - 2)}" height="${H - 18 - yy}" fill="${col}"><title>Lap ${l.lap} ${fmtT(l.lap_time)}${l.pit ? " (pit)" : ""}${l.in_traffic ? " (traffic)" : ""}</title></rect>`;
+  }).join("");
+  const ty = y(typ);
+  const ticks = [lo + 0.3, typ, hi - 0.3].map((t) => `<text x="2" y="${y(t) + 4}" font-size="10" fill="#66707c">${t.toFixed(1)}</text>`).join("");
+  return `<svg class="laps-svg" viewBox="0 0 ${W} ${H}">${ticks}${bars}<line x1="${P}" x2="${W}" y1="${ty}" y2="${ty}" stroke="#15181c" stroke-dasharray="4 3"/>
+    <text x="${W - 4}" y="${ty - 4}" font-size="10" text-anchor="end" fill="#15181c">typical ${fmtT(typ)}</text></svg>
+    <div class="legend"><span class="sw" style="background:#1f7ae0"></span>clean <span class="sw" style="background:#e09a2b"></span>in traffic
+    <span class="sw" style="background:#d93a3f"></span>&gt;1 s off / invalid <span class="sw" style="background:#b9c0c8"></span>pit</div>`;
+}
+
+function posChart(r) {
+  const p = r.positions || []; if (p.length < 2) return "";
+  const W = 860, H = 120, P = 30, max = Math.max(...p), min = Math.min(...p);
+  const x = (i) => P + (i / (p.length - 1)) * (W - P - 8), y = (v) => 10 + ((v - min) / Math.max(1, max - min)) * (H - 26);
+  const pts = p.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  return `<svg class="pos-svg" viewBox="0 0 ${W} ${H}"><text x="2" y="${y(min) + 4}" font-size="10" fill="#66707c">P${min}</text>
+    <text x="2" y="${y(max) + 4}" font-size="10" fill="#66707c">P${max}</text><polyline points="${pts}" fill="none" stroke="#1f7ae0" stroke-width="2"/></svg>`;
+}
+
+function render(r) {
+  const p = r.pace || {}, f = r.fuel || {}, rc = r.racecraft, s = r.start, fin = r.finish;
+  const c = (rc && rc.counts) || {};
+  const stints = (r.stints || []).map((st) => `<tr><td>${st.stint}</td><td>${st.from}–${st.to}</td><td>${st.laps}</td><td>${fmtT(st.avg)}</td>
+    <td>${fmtT(st.best)}</td><td class="${st.dropoff > 0.05 ? "pos" : ""}">${st.dropoff == null ? "–" : (st.dropoff > 0 ? "+" : "") + st.dropoff.toFixed(3) + " s/lap"}</td><td>${n(st.fuel_per_lap, 2, " L")}</td></tr>`).join("");
+  const tyres = (r.tyres || []).map((t) => `<h3>Pit stop after lap ${t.lap} <span class="muted small">(${t.laps} laps on those tyres)</span></h3>
+    <div class="tyre">${["LF", "RF", "LR", "RR"].map((k) => { const v = t.corners[k] || {};
+      return `<div><span class="muted small">${k}</span><b>${v.wear_left == null ? "–" : v.wear_left.toFixed(1) + "%"}</b><span class="small">used · ${n(v.per_lap, 2, "%/lap")}</span>
+        ${v.temp ? `<div class="small muted">${v.temp.map((x) => Math.round(x)).join(" / ")} °C</div>` : ""}</div>`; }).join("")}</div>`).join("");
+  const evs = rc ? (rc.events || []).filter((e) => e.kind !== "warning").slice().reverse() : [];
+  document.getElementById("page").innerHTML = `
+  <header><div><h1>Race report${r.live ? '<span class="live">LIVE</span>' : ""}</h1>
+    <div>${esc(r.track || "")} · ${esc(r.car || "")}</div><div class="muted small">${esc(r.driver || "")} · ${esc((r.date || "").replace("T", " "))} · ${esc(r.session_type || "")}</div></div>
+    <div class="muted small" style="text-align:right">SimCoach</div></header>
+  <div class="stats">
+    <div class="stat"><span class="muted small">Result</span><b>${fin ? "P" + fin.pos : "–"}</b><span class="small">${s ? "from P" + s.pos : ""}${fin && fin.class_pos ? " · class P" + fin.class_pos : ""}</span></div>
+    <div class="stat"><span class="muted small">Laps</span><b>${r.lap_count}</b><span class="small">${(r.stints || []).length} stint${(r.stints || []).length === 1 ? "" : "s"}</span></div>
+    <div class="stat"><span class="muted small">Best / typical</span><b>${fmtT(p.best)}</b><span class="small">typical ${fmtT(p.typical)}</span></div>
+    <div class="stat"><span class="muted small">Consistency</span><b>${p.within_pct == null ? "–" : p.within_pct + "%"}</b><span class="small">within 0.5 s · ±${n(p.spread)} s</span></div>
+  </div>
+  <h2>Key takeaways</h2><ul class="tk">${(r.takeaways || []).map((t) => `<li>${esc(t)}</li>`).join("") || "<li>Drive a few laps.</li>"}</ul>
+  <h2>Lap times</h2>${lapChart(r) || '<p class="muted">Lap chart appears after two laps.</p>'}
+  ${(r.positions || []).length > 1 ? `<h2>Position</h2>${posChart(r)}` : ""}
+  <h2>Stints &amp; tyres</h2>
+  <table><tr><th>Stint</th><th>Laps</th><th>#</th><th>Average</th><th>Best</th><th>Pace drop-off</th><th>Fuel / lap</th></tr>${stints}</table>
+  <p class="muted small">Pace drop-off is the trend of your clean lap times through the stint – mostly tyre wear (plus fuel burn and track changes).</p>
+  ${tyres || `<p class="muted small">Tyre wear and temperatures: iRacing only sends these while you're stopped in your pit stall, so they appear here for races with pit stops.</p>`}
+  <h2>Fuel</h2>
+  <div class="stats">
+    <div class="stat"><span class="muted small">Average / lap</span><b>${n(f.avg, 2, " L")}</b><span class="small">${n(f.min, 2)} – ${n(f.max, 2)} L</span></div>
+    <div class="stat"><span class="muted small">Used</span><b>${n(f.total, 1, " L")}</b></div>
+    <div class="stat"><span class="muted small">${r.finished ? "Spare at the end" : "In the tank now"}</span><b>${n(f.spare, 1, " L")}</b><span class="small">${f.spare != null && f.avg ? (f.spare / f.avg).toFixed(1) + " laps" : ""}</span></div>
+    <div class="stat"><span class="muted small">Fuel-save laps</span><b>${f.save_laps ? f.save_ok + "/" + f.save_laps : "–"}</b><span class="small">on target</span></div>
+  </div>
+  <h2>Racecraft</h2>
+  ${rc ? `<div class="stats">
+    <div class="stat"><span class="muted small">Score</span><b>${rc.score ?? "–"}</b></div>
+    <div class="stat"><span class="muted small">Clean passes</span><b>${c.clean_pass || 0}</b><span class="small">${c.dirty_pass ? c.dirty_pass + " not clean" : ""}</span></div>
+    <div class="stat"><span class="muted small">Clean let-bys</span><b>${c.clean_letby || 0}</b><span class="small">${c.costly_letby ? c.costly_letby + " costly" : ""}</span></div>
+    <div class="stat"><span class="muted small">Incidents</span><b>${rc.incidents || 0}x</b><span class="small">defended ${c.defended || 0}x</span></div></div>
+    ${rc.traffic_lost_avg != null ? `<p>Traffic laps: ${rc.traffic_laps} of ${rc.laps} · cost ${n(rc.traffic_lost_avg)} s each on average.</p>` : ""}
+    <ul>${evs.map((e) => `<li class="${e.ok ? "ev-ok" : e.ok === false ? "ev-bad" : ""}">${esc(e.text)}</li>`).join("") || "<li class='muted'>No passes or let-bys recorded.</li>"}</ul>`
+    : '<p class="muted">Racecraft is switched off (Settings → Training features).</p>'}
+  <h2>All laps</h2>
+  <table><tr><th>Lap</th><th>Time</th><th>Pos</th><th>Fuel</th><th>Traffic</th><th></th></tr>
+  ${(r.laps || []).map((l) => `<tr><td>${l.lap}</td><td>${fmtT(l.lap_time)}</td><td>${l.pos ? "P" + l.pos : "–"}</td><td>${n(l.fuel_used, 2)}</td>
+    <td>${l.traffic_s ? l.traffic_s.toFixed(0) + " s" : ""}</td><td class="muted small">${l.pit ? "pit" : ""}${!l.valid ? " invalid" : ""}</td></tr>`).join("")}</table>`;
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/race_report" + (q.get("id") ? "?id=" + encodeURIComponent(q.get("id")) : ""));
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "No race report");
+    render(d);
+    if (d.live && !q.get("id")) setTimeout(load, 15000);        // live race: refresh
+  } catch (e) {
+    document.getElementById("page").innerHTML = `<h1>Race report</h1><p class="muted">${esc(e.message)}</p>
+      <p>Race reports are recorded automatically in race sessions (iRacing races and AI races).</p>`;
+  }
+}
+load();
+</script>
+</body>
+</html>

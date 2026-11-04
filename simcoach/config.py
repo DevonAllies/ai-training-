@@ -81,6 +81,9 @@ class Config:
     # Weekly training goal: "minutes" on track, "sessions" or "laps" per week
     goal_type: str = "minutes"
     goal_value: float = 180
+    # Race mode: in race sessions switch the training off (corner calls, drills, consistency
+    # trainer, game pop-ups) and record a race report instead
+    race_mode: bool = True
     # Training features on/off (keys from FEATURES)
     features: dict = field(default_factory=lambda: {k: True for k in FEATURES})
 

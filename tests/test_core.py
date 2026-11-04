@@ -1226,3 +1226,70 @@ def test_racecraft_live_demo_traffic_game_and_widget():
     assert "traffic" in eng.overlay()
     client.post("/api/features", json={"features": {"traffic": False}})
     assert client.get("/api/traffic").status_code == 409 and eng.overlay()["traffic"] is None
+
+
+# ------------------------------------------------- v12: race mode + race report
+def test_race_report_stints_tyres_fuel_and_takeaways(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from simcoach import race_report as rr
+    rec = rr.RaceRecorder()
+    rec.start({"track": "Spa", "car": "GT3", "driver": "Me", "session_type": "Race"})
+    rec.position(8, 5)
+    fuel = 60.0
+    for lap in range(1, 21):
+        pit = lap in (10, 11)                         # in-lap / out-lap
+        t = 120.0 + (0.08 * lap if lap <= 10 else 0.08 * (lap - 10)) + (4.0 if lap == 6 else 0)
+        fuel = fuel - 3.0 if lap != 10 else 58.0
+        if lap == 10:                                 # pit stall: tyre reading, then leave
+            rec.tyre_reading({c: {"wear": [92.0, 90.0, 91.0], "temp": [80, 85, 82]} for c in rr.CORNERS}, lap)
+            rec.tyre_reading(None, lap)
+        rec.position(8 - lap // 5, 5 - lap // 7)
+        rec.add_lap({"lap": lap, "lap_time": t, "valid": True, "pit": pit, "fuel_used": 3.0 if not pit else None,
+                     "fuel_level": fuel, "in_traffic": lap == 15})
+    assert "in the tank now" in " ".join(rec.report()["takeaways"])
+    rec.session_state(5)                              # chequered flag
+    rep = rec.report({"counts": {"clean_pass": 3, "clean_letby": 2}, "incidents": 2, "score": 92,
+                      "events": [], "traffic_lost_avg": 0.6, "traffic_laps": 1, "laps": 20})
+    assert rep["start"] == {"pos": 8, "class_pos": 5} and rep["finish"]["pos"] == 4
+    assert len(rep["stints"]) == 2 and rep["stints"][0]["to"] == 11
+    assert rep["stints"][0]["dropoff"] == pytest.approx(0.08, abs=0.02)
+    assert rep["pace"]["bad_laps"][0]["lap"] == 6
+    assert rep["fuel"]["avg"] == 3.0 and rep["fuel"]["spare"] is not None
+    assert rep["tyres"][0]["corners"]["LF"]["wear_left"] == 10.0 and rep["tyres"][0]["corners"]["LF"]["per_lap"] == 1.0
+    tk = " ".join(rep["takeaways"])
+    assert "Started P8, finished P4" in tk and "pace dropped" in tk and "Racecraft: 3 clean passes" in tk
+    assert "worst lap 6" in tk and "LF wore most" in tk and "spare" in tk
+    rec.save(rep["racecraft"])
+    lst = rr.list_reports()
+    assert lst and lst[0]["finish"]["pos"] == 4
+    assert rr.load_report(lst[0]["id"])["lap_count"] == 20
+    with pytest.raises(ValueError):
+        rr.load_report("../config")
+
+
+def test_race_mode_turns_training_off_and_records_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False, overlay_mode="always")
+    src = DemoSource()
+    src.race = True
+    eng = LiveEngine(cfg, src)
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    eng.coach.start_focus(None)
+    eng.consistency.start(None, 0.3, 5)
+    _drive(eng, 2.8)
+    assert eng.is_race and eng.race_mode
+    assert not eng.events and eng.coach.focus.attempts == 0 and not eng.consistency.laps   # training is off
+    ov = eng.overlay()
+    assert ov["race_mode"] and ov["events"] == [] and ov["focus"] == {} and ov["game"] is None
+    assert ov["traffic"] is not None and ov["visible"]
+    r = client.get("/api/race_report").json()
+    assert r["live"] and r["lap_count"] >= 2 and r["start"]["pos"] >= 1 and r["racecraft"]["counts"]
+    assert client.get("/race-report").status_code == 200
+    assert client.get("/api/race_reports").json()                    # saved every lap
+    assert client.get("/api/training").json()["race_mode"] is True
+    # race mode off -> training back on in races
+    client.post("/api/config", json={"race_mode": False})
+    assert not eng.race_mode

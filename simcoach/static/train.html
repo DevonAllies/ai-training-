@@ -58,6 +58,11 @@
 <div class="wrap">
   <div class="top"><b>SimCoach · Training</b><a href="/">Dashboard ›</a></div>
 
+  <div class="card" id="race-banner" style="display:none;border-color:var(--g-gold)">
+    <h2 style="color:var(--g-gold)">Race mode</h2>
+    <p style="margin:0">Training is paused in races. Delta, fuel and faster-car warnings stay on, and SimCoach records your race report.</p>
+    <a href="/race-report" style="display:block;margin-top:10px;color:var(--g-blue);font-weight:700;text-decoration:none">Open live race report ›</a>
+  </div>
   <div class="card" id="game-card"></div>
 
   <div class="card">
@@ -80,7 +85,7 @@
     <div class="links">
       <a href="/widget/plan">🏁 Quest</a><a href="/widget/consistency">🎯 Consistency</a>
       <a href="/widget/endurance">⏱ Endurance</a><a href="/widget/fuel">⛽ Fuel</a>
-      <a href="/widget/racecraft" style="grid-column:1/-1">🏎 Racecraft – clean passes &amp; let-bys</a>
+      <a href="/widget/racecraft">🏎 Racecraft</a><a href="/race-report">🏆 Race report</a>
     </div>
   </div>
 
@@ -196,6 +201,7 @@
     if (sel === null) sel = st.mode === "free" ? "plan" : st.mode;
     const sig = JSON.stringify([st.mode, st.features, (st.corners || []).map((c) => c.index), sel]);
     if (sig !== lastSig) { lastSig = sig; renderModes(); renderOpts(); renderFeatures(); }
+    $("race-banner").style.display = st.race_mode ? "" : "none";
     renderGame(); renderNow();
   }
 
