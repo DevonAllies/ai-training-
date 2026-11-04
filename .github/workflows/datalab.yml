@@ -10,8 +10,9 @@ name: DataLab Trainer
 
 on:
   push:
+    branches: ["**"]          # needed: listing only tags would stop branch pushes from triggering
+    tags: ["datalab-v*"]      # path filters don't apply to tag pushes
     paths: ["datalab_trainer/**", ".github/workflows/datalab.yml"]
-    tags: ["datalab-v*"]
   pull_request:
     paths: ["datalab_trainer/**", ".github/workflows/datalab.yml"]
   workflow_dispatch:
