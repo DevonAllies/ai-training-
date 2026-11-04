@@ -39,7 +39,8 @@ function showTab(name) {
   if (name === "sessions") loadSessions();
   if (name === "corners") initCorners();
   if (name === "race") refreshRace();
-  if (name === "progress") { initProgress(); loadGoal(); }
+  if (name === "progress") { initProgress(); loadGoal(); loadGame(); }
+  if (name === "race") loadRaceReports();
 }
 
 // ------------------------------------------------------------ live
@@ -510,7 +511,20 @@ $("#pg-plan-out").addEventListener("click", async (ev) => {
 setInterval(async () => {                       // keep ticks in sync when a drill completes on track
   if (!$("#tab-progress").classList.contains("active")) return;
   try { const r = await api("/api/plan"); if (r.plan.length) renderPlan(r.plan); } catch { /* offline */ }
+  loadGame();
 }, 4000);
+
+// ------------------------------------------------------------ training game
+async function loadGame() {
+  const el = $("#game-out");
+  if (!el || (state.features && state.features.game === false)) return;
+  try {
+    const g = await api("/api/game");
+    const html = SC.gameHeader(g) + `<div class="label" style="margin-top:12px">Badges ${g.badge_count}/${g.badges.length}</div>` + SC.badges(g) + SC.feed(g);
+    if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+    SC.toasts(g);
+  } catch { /* switched off */ }
+}
 
 // ------------------------------------------------------------ teammate lap files
 const tm = { upload: null };
@@ -660,6 +674,7 @@ function renderComparison(r) {
   };
   const hasLine = !!(c.line && me.lat && ref.lat);
   $("#line-none").classList.toggle("hidden", hasLine);
+  $("#line-rebuilt").classList.toggle("hidden", !(hasLine && ((me.meta || {}).line === "reconstructed" || (ref.meta || {}).line === "reconstructed")));
   $("#c-line").classList.toggle("hidden", !hasLine);
   $("#c-lines").parentElement.parentElement.classList.toggle("hidden", !hasLine);
   state.lineZoom = null;
@@ -917,6 +932,7 @@ async function loadSettings() {
   $("#s-voice").value = c.voice_mode || "full";
   $("#s-update").value = c.update_mode || "auto";
   $("#s-lan").checked = !!c.lan_access;
+  $("#s-race-mode").checked = c.race_mode !== false;
   loadFeatureToggles();
   refreshLan();
   refreshUpdate();
@@ -935,6 +951,7 @@ $("#btn-save").addEventListener("click", async () => {
     voice_practice_only: $("#s-voice-practice").checked,
     update_mode: $("#s-update").value,
     lan_access: $("#s-lan").checked,
+    race_mode: $("#s-race-mode").checked,
     ...(document.querySelector("#s-autostart-row").classList.contains("hidden") ? {} : { start_with_windows: $("#s-autostart").checked }),
     focus_target: parseFloat($("#s-focus-target").value) || 0.05,
   };
@@ -967,11 +984,16 @@ async function refreshLan() {
     const sel = $("#lan-url"), keep = sel.value;
     sel.innerHTML = l.urls.map((u) => `<option>${esc(u)}</option>`).join("");
     if (keep && l.urls.includes(keep)) sel.value = keep;
-    $("#lan-qr").src = "/api/lan/qr.svg?url=" + encodeURIComponent(sel.value);
+    setQr();
   }
   if (l.viewer_is_remote) { $("#s-lan").disabled = true; $("#btn-save").disabled = true; }
 }
-$("#lan-url").addEventListener("change", (e) => { $("#lan-qr").src = "/api/lan/qr.svg?url=" + encodeURIComponent(e.target.value); });
+function setQr() {
+  const u = $("#lan-url").value + ($("#lan-target").value || "");
+  $("#lan-qr").src = "/api/lan/qr.svg?url=" + encodeURIComponent(u);
+}
+$("#lan-url").addEventListener("change", setQr);
+$("#lan-target").addEventListener("change", setQr);
 $("#s-lan").addEventListener("change", async () => {
   try { await api("/api/config", { method: "POST", body: { lan_access: $("#s-lan").checked } }); } catch (e) { msg($("#s-msg"), e.message, "err"); }
   refreshLan();
@@ -1142,3 +1164,14 @@ function applyUnits() { document.querySelectorAll('[data-unit="speed"]').forEach
   loadGoal();
   connectWS();
 })();
+
+// ------------------------------------------------------------ race reports
+async function loadRaceReports() {
+  const sel = $("#rr-list"); if (!sel) return;
+  const list = await api("/api/race_reports").catch(() => []);
+  sel.innerHTML = `<option value="">Latest race</option>` + list.map((r) =>
+    `<option value="${esc(r.id)}">${esc((r.date || "").replace("T", " "))} · ${esc(r.track || "")}${r.finish ? " · P" + r.finish.pos : ""}</option>`).join("");
+}
+$("#rr-list") && $("#rr-list").addEventListener("change", (e) => {
+  $("#rr-open").href = "/race-report" + (e.target.value ? "?id=" + encodeURIComponent(e.target.value) : "");
+});

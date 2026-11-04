@@ -33,6 +33,15 @@
   .ev.first .t { font-weight: 700; font-size: 15px; }
   .events { min-height: 96px; }
   .sectors { display: flex; gap: 4px; margin-top: 8px; }
+  .traffic { margin-top: 6px; font-weight: 700; font-size: 13px; min-height: 0; }
+  .traffic .w { background: #3a2a5c; color: #e8dcff; border-radius: 4px; padding: 3px 6px; display: block; }
+  .xp { display: flex; align-items: center; gap: 8px; margin-top: 8px; font: 700 12px Consolas, monospace; color: var(--muted); min-height: 18px; }
+  .xp .lv { background: var(--warn); color: #1a1300; border-radius: 99px; padding: 1px 7px; }
+  .xp .bar { flex: 1; height: 5px; background: #1b2027; border-radius: 99px; overflow: hidden; }
+  .xp .bar i { display: block; height: 100%; background: linear-gradient(90deg, #3ea6ff, #a77bff); }
+  .xp .combo { color: var(--warn); }
+  .xp .pop { color: var(--warn); animation: pop .4s ease; }
+  @keyframes pop { from { transform: scale(1.4); } }
   .sectors div { flex: 1; text-align: center; font: 700 11px Consolas, monospace; padding: 4px 0; border-radius: 3px; background: #1b2027; }
 </style>
 </head>
@@ -55,6 +64,8 @@
   <div id="cue" class="cue"><div class="fill" id="cuefill"></div><span id="cuetext"></span></div>
   <div id="events" class="events"></div>
   <div id="sectors" class="sectors"></div>
+  <div id="traffic" class="traffic"></div>
+  <div id="xp" class="xp"></div>
 </div>
 <script>
 "use strict";
@@ -135,6 +146,17 @@ function render(st) {
     html += `<div style="background:${bg}">${txt}</div>`;
   }
   $("sectors").innerHTML = html;
+
+  const trf = st.traffic, tEl = $("traffic");
+  let th = "";
+  if (trf && trf.warning) th = `<span class="w">FASTER ${esc(trf.warning.class || "CAR")} ${trf.warning.gap_s}s${trf.warning.corner ? " · AT " + esc(trf.warning.corner) : ""}</span>`;
+  else if (trf && trf.last && trf.last.kind !== "warning") th = `<span class="${trf.last.ok ? "good" : trf.last.ok === false ? "bad" : ""}">${esc(trf.last.text)}</span>`;
+  if (tEl.dataset.h !== th) { tEl.innerHTML = th; tEl.dataset.h = th; }
+  const g = st.game, xp = $("xp");
+  const gh = !g ? "" : `<span class="lv">L${g.level}</span><span class="bar"><i style="width:${g.pct}%"></i></span>` +
+    (g.combo >= 2 ? `<span class="combo">COMBO ${g.combo}${g.mult > 1 ? " x" + g.mult : ""}</span>` : "") +
+    (g.pop ? `<span class="pop">${g.pop.xp ? "+" + g.pop.xp + " XP " : ""}${esc(g.pop.kind === "level" || g.pop.kind === "badge" ? g.pop.text : "")}</span>` : "");
+  if (xp.dataset.h !== gh) { xp.innerHTML = gh; xp.dataset.h = gh; }
 }
 
 function connect() {

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1216">
+<title>SimCoach Training</title>
+<!-- Phone-friendly training hub: pick what you train, start/stop it, switch training features. -->
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/static/game.css">
+<style>
+  html, body { margin: 0; background: var(--g-bg); color: var(--g-text); font: 15px/1.4 "Segoe UI", system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 12px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .top b { font-size: 18px; letter-spacing: .5px; }
+  .top a { color: var(--g-muted); font-size: 13px; text-decoration: none; }
+  .card { background: var(--g-card); border: 1px solid var(--g-line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .7px; color: var(--g-muted); margin: 0 0 10px; font-weight: 600; }
+  .now { display: flex; align-items: center; gap: 10px; }
+  .now .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--g-muted); flex: none; }
+  .now.live .dot { background: var(--g-good); box-shadow: 0 0 0 4px rgba(51,194,127,.2); }
+  .now .t { font-weight: 700; font-size: 17px; }
+  .now .s { color: var(--g-muted); font-size: 13px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode { text-align: left; background: #11161c; border: 2px solid var(--g-line); border-radius: 14px; padding: 12px; color: var(--g-text); cursor: pointer; font: inherit; min-height: 84px; }
+  .mode .ic { font-size: 22px; line-height: 1; }
+  .mode .n { font-weight: 700; margin-top: 6px; }
+  .mode .d { color: var(--g-muted); font-size: 12px; }
+  .mode.sel { border-color: var(--g-blue); }
+  .mode.on { border-color: var(--g-good); background: #10201a; }
+  .mode.dis { opacity: .45; }
+  .mode.wide { grid-column: 1 / -1; min-height: 0; display: flex; gap: 10px; align-items: center; }
+  .mode.wide .n { margin: 0; }
+  .opts label { display: block; margin: 10px 0 4px; color: var(--g-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  select { width: 100%; background: #0f1318; color: var(--g-text); border: 1px solid var(--g-line); border-radius: 10px; padding: 11px; font-size: 15px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { background: #11161c; border: 1px solid var(--g-line); color: var(--g-text); border-radius: 99px; padding: 8px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  .chip.sel { border-color: var(--g-blue); color: var(--g-blue); font-weight: 700; }
+  button.go { width: 100%; margin-top: 14px; background: var(--g-blue); border: 0; color: #04121f; font-weight: 800; font-size: 16px; padding: 14px; border-radius: 12px; cursor: pointer; }
+  button.stop { width: 100%; margin-top: 10px; background: #2a1a1c; border: 1px solid var(--g-bad); color: var(--g-bad); font-weight: 700; font-size: 15px; padding: 12px; border-radius: 12px; cursor: pointer; }
+  button.small { background: #232a33; color: var(--g-text); border: 1px solid var(--g-line); border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .msg { min-height: 1.2em; font-size: 13px; color: var(--g-muted); margin-top: 8px; }
+  .msg.err { color: var(--g-bad); } .msg.ok { color: var(--g-good); }
+  .links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .links a { display: block; text-align: center; padding: 12px 8px; border-radius: 12px; background: #11161c; border: 1px solid var(--g-line); color: var(--g-text); text-decoration: none; font-weight: 600; }
+  .sw { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--g-line); }
+  .sw:first-of-type { border-top: 0; }
+  .sw span { font-size: 14px; }
+  .tg { position: relative; width: 50px; height: 30px; flex: none; }
+  .tg input { opacity: 0; width: 0; height: 0; }
+  .tg i { position: absolute; inset: 0; background: #2a313b; border-radius: 99px; transition: .2s; cursor: pointer; }
+  .tg i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: .2s; }
+  .tg input:checked + i { background: var(--g-good); }
+  .tg input:checked + i::after { transform: translateX(20px); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><b>SimCoach · Training</b><a href="/">Dashboard ›</a></div>
+
+  <div class="card" id="race-banner" style="display:none;border-color:var(--g-gold)">
+    <h2 style="color:var(--g-gold)">Race mode</h2>
+    <p style="margin:0">Training is paused in races. Delta, fuel and faster-car warnings stay on, and SimCoach records your race report.</p>
+    <a href="/race-report" style="display:block;margin-top:10px;color:var(--g-blue);font-weight:700;text-decoration:none">Open live race report ›</a>
+  </div>
+  <div class="card" id="game-card"></div>
+
+  <div class="card">
+    <h2>Now training</h2>
+    <div id="now"></div>
+    <div id="now-detail"></div>
+    <button class="stop" id="stop" style="display:none">Stop · free driving</button>
+  </div>
+
+  <div class="card">
+    <h2>Choose training</h2>
+    <div class="modes" id="modes"></div>
+    <div class="opts" id="opts"></div>
+    <button class="go" id="go">Start</button>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Widgets</h2>
+    <div class="links">
+      <a href="/widget/plan">🏁 Quest</a><a href="/widget/consistency">🎯 Consistency</a>
+      <a href="/widget/endurance">⏱ Endurance</a><a href="/widget/fuel">⛽ Fuel</a>
+      <a href="/widget/racecraft">🏎 Racecraft</a><a href="/race-report">🏆 Race report</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Training features</h2>
+    <div id="features"></div>
+  </div>
+</div>
+<script src="/static/game.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const esc = SC.esc;
+  const MODES = [
+    { id: "plan", ic: "🏁", n: "Practice plan", d: "Quests from your last session", f: "practice" },
+    { id: "drill", ic: "🔁", n: "Corner drill", d: "One corner until it's right", f: "drills" },
+    { id: "consistency", ic: "🎯", n: "Consistency", d: "Same lap, every lap", f: "consistency" },
+    { id: "fuel", ic: "⛽", n: "Fuel saving", d: "Lift & coast for +1 lap", f: "endurance" },
+    { id: "free", ic: "🚗", n: "Free driving", d: "Just the live delta", f: null, wide: true },
+  ];
+  const NAMES = Object.fromEntries(MODES.map((m) => [m.id, m.n]));
+  let st = null, sel = null, opt = { minutes: 45, corner: "", kind: "", window: 0.3, goal: 5, fuel_mode: "extra_lap" };
+  let lastSig = "", last = {};
+
+  const say = (t, cls) => { $("msg").textContent = t || ""; $("msg").className = "msg" + (cls ? " " + cls : ""); };
+  const setHtml = (el, key, html) => { if (last[key] !== html) { el.innerHTML = last[key] = html; } };
+
+  function renderModes() {
+    const f = st.features || {};
+    $("modes").innerHTML = MODES.map((m) => {
+      const off = m.f && f[m.f] === false;
+      return `<button class="mode ${m.wide ? "wide" : ""} ${sel === m.id ? "sel" : ""} ${st.mode === m.id ? "on" : ""} ${off ? "dis" : ""}" data-mode="${m.id}">
+        <div class="ic">${m.ic}</div><div><div class="n">${m.n}${off ? " · off" : ""}</div><div class="d">${m.d}</div></div></button>`;
+    }).join("");
+  }
+
+  const chips = (key, vals, fmt) => `<div class="chips">${vals.map((v) => `<button class="chip ${opt[key] == v ? "sel" : ""}" data-opt="${key}" data-val="${v}">${fmt ? fmt(v) : v}</button>`).join("")}</div>`;
+
+  function renderOpts() {
+    const o = $("opts");
+    const f = st.features || {};
+    const m = MODES.find((x) => x.id === sel);
+    const off = m && m.f && f[m.f] === false;
+    $("go").style.display = sel && !off ? "" : "none";
+    $("go").textContent = sel === "free" ? "Stop training" : sel === st.mode ? "Restart" : "Start " + (NAMES[sel] || "");
+    if (!sel) { o.innerHTML = `<p class="msg">Tap a training to set it up.</p>`; return; }
+    if (off) { o.innerHTML = `<p class="msg">${NAMES[sel]} is switched off. Turn it on under Training features below.</p>`; return; }
+    if (sel === "plan") {
+      o.innerHTML = `<label>Session length</label>${chips("minutes", [30, 45, 60, 90], (v) => v + " min")}
+        <p class="msg">Continues the current plan, or builds a new one from your last session.</p>`;
+    } else if (sel === "drill") {
+      const corners = st.corners || [];
+      o.innerHTML = `<label>Corner</label><select data-opt="corner"><option value="">Coach picks (biggest loss)</option>${corners.map((c) =>
+        `<option value="${c.index}" ${String(opt.corner) === String(c.index) ? "selected" : ""}>${esc(c.title)}${c.avg_loss > 0.02 ? ` · ${c.avg_loss.toFixed(2)}s` : ""}${c.main_issue ? " · " + esc(c.main_issue) : ""}</option>`).join("")}</select>
+        <label>Drill</label><select data-opt="kind"><option value="">Match my mistake</option>${Object.entries(st.drills || {}).map(([k, t]) =>
+        `<option value="${k}" ${opt.kind === k ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+        ${corners.length ? "" : `<p class="msg">Drive a lap against a reference so the corners show up here.</p>`}`;
+    } else if (sel === "consistency") {
+      o.innerHTML = `<label>Window</label>${chips("window", [0.2, 0.3, 0.5], (v) => "±" + v + " s")}
+        <label>Laps in a row</label>${chips("goal", [5, 10, 15])}`;
+    } else if (sel === "fuel") {
+      o.innerHTML = `<label>Goal</label><div class="chips">
+        <button class="chip ${opt.fuel_mode === "extra_lap" ? "sel" : ""}" data-opt="fuel_mode" data-val="extra_lap">+1 lap on this tank</button>
+        <button class="chip ${opt.fuel_mode === "target" ? "sel" : ""}" data-opt="fuel_mode" data-val="target">Save 0.1 L / lap</button></div>
+        <p class="msg">Needs a clean lap with fuel data first.</p>`;
+    } else {
+      o.innerHTML = `<p class="msg">Stops drills, consistency runs and fuel saving. Live delta and corner calls stay on.</p>`;
+    }
+  }
+
+  function renderNow() {
+    const m = st.mode, f = st.focus || {}, c = st.consistency || {};
+    let line = st.on_track ? "On track" : st.connected ? "In iRacing, not on track" : "Waiting for iRacing";
+    let detail = "";
+    if (m === "plan") {
+      const step = (st.plan || []).find((p) => p.status === "active");
+      line = step ? step.title : line;
+      detail = SC.questPath(st, { controls: true });
+    } else if (m === "drill") {
+      line = `${f.drill || "Drill"} · ${f.title || f.name || "picking a corner"}`;
+      const pips = Array.from({ length: f.needed || 3 }, (_, k) => `<i class="${k < (f.streak || 0) ? "ok" : ""}"></i>`).join("");
+      detail = `<p class="msg">${esc(f.message || f.how || "")}</p><div class="g-pips">${pips}</div>`;
+    } else if (m === "consistency") {
+      line = `Streak ${c.streak || 0} / ${c.goal}` + (c.target ? ` · target ${SC.fmtT(c.target)} ±${c.window}` : "");
+      detail = `<p class="msg">${esc(c.message || "")}</p>`;
+    } else if (m === "fuel") {
+      line = st.fuel_target ? `Fuel target ${st.fuel_target.toFixed(2)} L / lap` : "Fuel saving";
+      const laps = (st.last_laps || []).filter((l) => l.fuel_ok !== undefined && l.fuel_ok !== null);
+      detail = `<p class="msg">${laps.filter((l) => l.fuel_ok).length} of ${laps.length} laps on target${st.fuel && st.fuel.level ? ` · ${st.fuel.level} L in the tank` : ""}</p>`;
+    }
+    setHtml($("now"), "now", `<div class="now ${m !== "free" ? "live" : ""}"><div class="dot"></div><div><div class="t">${esc(NAMES[m] || m)}</div><div class="s">${esc(line)}</div></div></div>`);
+    setHtml($("now-detail"), "detail", detail);
+    $("stop").style.display = m === "free" ? "none" : "";
+  }
+
+  function renderFeatures() {
+    const labels = st.feature_labels || {};
+    $("features").innerHTML = Object.keys(labels).map((k) => `<div class="sw"><span>${esc(labels[k])}</span>
+      <label class="tg"><input type="checkbox" data-feature="${k}" ${st.features[k] !== false ? "checked" : ""}><i></i></label></div>`).join("");
+  }
+
+  function renderGame() {
+    const g = st.game;
+    $("game-card").style.display = g ? "" : "none";
+    if (g) setHtml($("game-card"), "game", SC.gameHeader(g) + `<details style="margin-top:10px"><summary class="g-sub">Badges ${g.badge_count}/${g.badges.length}</summary>${SC.badges(g)}</details>`);
+    SC.toasts(g);
+  }
+
+  async function load() {
+    try {
+      st = await SC.api("/api/training");
+    } catch (e) { say("SimCoach isn't reachable: " + e.message, "err"); return; }
+    if (sel === null) sel = st.mode === "free" ? "plan" : st.mode;
+    const sig = JSON.stringify([st.mode, st.features, (st.corners || []).map((c) => c.index), sel]);
+    if (sig !== lastSig) { lastSig = sig; renderModes(); renderOpts(); renderFeatures(); }
+    $("race-banner").style.display = st.race_mode ? "" : "none";
+    renderGame(); renderNow();
+  }
+
+  document.addEventListener("click", async (ev) => {
+    const m = ev.target.closest("[data-mode]");
+    if (m) { sel = m.dataset.mode; lastSig = ""; say(""); load(); return; }
+    const c = ev.target.closest(".chip[data-opt]");
+    if (c) { opt[c.dataset.opt] = isNaN(+c.dataset.val) ? c.dataset.val : +c.dataset.val; renderOpts(); }
+  });
+  document.addEventListener("change", async (ev) => {
+    const s = ev.target.closest("select[data-opt]");
+    if (s) { opt[s.dataset.opt] = s.value; return; }
+    const f = ev.target.closest("input[data-feature]");
+    if (f) {
+      try { await SC.api("/api/features", { features: { [f.dataset.feature]: f.checked } }); say("Saved", "ok"); lastSig = ""; load(); }
+      catch (e) { say(e.message, "err"); f.checked = !f.checked; }
+    }
+  });
+  async function select(payload) {
+    say("…");
+    try { await SC.api("/api/training/select", payload); say(payload.mode === "free" ? "Stopped" : NAMES[payload.mode] + " started", "ok"); lastSig = ""; await load(); }
+    catch (e) { say(e.message, "err"); }
+  }
+  $("go").addEventListener("click", () => {
+    const p = { mode: sel };
+    if (sel === "plan") p.minutes = opt.minutes;
+    if (sel === "drill") { if (opt.corner !== "") p.corner = +opt.corner; if (opt.kind) p.kind = opt.kind; }
+    if (sel === "consistency") { p.window = opt.window; p.goal = opt.goal; }
+    if (sel === "fuel") { p.fuel_mode = opt.fuel_mode; if (opt.fuel_mode === "target") p.save_per_lap = 0.1; }
+    select(p);
+  });
+  $("stop").addEventListener("click", () => select({ mode: "free" }));
+  SC.bindQuests($("now-detail"), (e) => { if (e) say(e.message, "err"); else { last.detail = ""; load(); } });
+  load();
+  setInterval(() => { if (!document.hidden) load(); }, 1000);
+})();
+</script>
+</body>
+</html>

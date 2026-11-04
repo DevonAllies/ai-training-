@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 os.environ.setdefault("SIMCOACH_HOME", tempfile.mkdtemp(prefix="simcoach_test_"))
 os.environ["SIMCOACH_NO_NATIVE_VOICE"] = "1"   # never talk out loud during tests
@@ -91,7 +92,7 @@ def test_lap_buffer_and_engine_with_simulated_samples():
     # feed 2.5 laps of synthetic samples at 60 Hz without real time passing
     src = eng.source
     for _ in range(int(60 * demo.reference_lap().lap_time * 2.6)):
-        src._last -= 1 / 60  # pretend 1/60 s elapsed
+        src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed  # pretend 1/60 s elapsed
         eng._process(src.read())
     assert len(eng.laps_done) >= 2
     lap_info = eng.laps_done[0]
@@ -174,7 +175,7 @@ def _drive(eng, laps=2.3):
     src = eng.source
     eng.session = src.session()
     for _ in range(int(60 * demo.reference_lap().lap_time * laps)):
-        src._last -= 1 / 60
+        src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
         eng._process(src.read())
 
 
@@ -253,8 +254,12 @@ def test_voice_queue_is_bounded_and_deduped():
 
 
 def test_session_coach_report_focus_and_cues():
-    eng = LiveEngine(Config(record_laps=False, voice_native=False), DemoSource())
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
     eng.coach.voice.native = False
+    spoken = []                                          # every phrase (the voice log only keeps the last 20)
+    say = eng.coach.voice.say
+    eng.coach.voice.say = lambda text, **kw: (spoken.append(text), say(text, **kw))[1]
     eng.set_reference(demo.reference_lap())
     _drive(eng, 3.6)
     rep = eng.coach.report()
@@ -262,7 +267,6 @@ def test_session_coach_report_focus_and_cues():
     worst = max(rep["corners"], key=lambda c: c["avg_loss"])
     assert worst["name"] in ("C3", "C7") and worst["main_issue"]
     assert rep["summary"]
-    spoken = [v["text"] for v in eng.coach.voice.log]
     assert any(t.startswith("C3,") for t in spoken)       # pre-corner cue from last lap's mistake
     # drill mode picks the worst corner automatically
     st = eng.coach.start_focus(None)
@@ -332,13 +336,16 @@ def test_no_memory_growth_over_long_session():
     eng.coach.history = _c.deque(maxlen=5)
     eng.race.max_laps = 5
     eng.coach.voice.log = _c.deque(maxlen=5)
+    eng.traffic.events = _c.deque(maxlen=5)
+    eng.traffic.laps = _c.deque(maxlen=5)
+    eng.game.feed = _c.deque(maxlen=5)
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
 
     def run(laps):
         for _ in range(per_lap * laps):
-            src._last -= 1 / 60
+            src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
             eng._process(src.read())
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
@@ -349,7 +356,7 @@ def test_no_memory_growth_over_long_session():
     def to_lap_end():                       # measure at the same point of a lap each time
         n = eng.lap_count
         while eng.lap_count == n:
-            src._last -= 1 / 60
+            src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
             eng._process(src.read())
 
     run(2)                                  # settle one-off allocations (first comparisons, history file)
@@ -364,6 +371,7 @@ def test_no_memory_growth_over_long_session():
     # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
     assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
     assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
+    assert len(eng.traffic._hist) <= 120 and len(eng._clean_times) <= 5 and len(eng.traffic._last_ev) <= 128
 
 
 # ------------------------------------------------------------------ v4: auto-update
@@ -986,3 +994,302 @@ def test_weekly_goal_live_and_api():
     assert client.post("/api/config", json={"goal_type": "laps", "goal_value": 50}).json()["goal_type"] == "laps"
     client.post("/api/config", json={"features": {"goals": False}})
     assert client.get("/api/goals").status_code == 409
+
+
+# ------------------------------------------------- v12: training game, phone training hub, widgets
+def test_training_game_xp_combo_daily_badges(tmp_path):
+    import datetime as dt
+    from simcoach.game import XP, TrainingGame, combo_mult, daily_for, level_for
+    day = dt.date(2026, 11, 4)
+    assert level_for(0)["level"] == 1 and level_for(100)["level"] == 2 and level_for(274)["level"] == 2
+    assert level_for(275)["level"] == 3
+    assert [combo_mult(n) for n in (0, 2, 3, 6, 10)] == [1, 1, 2, 3, 4]
+    g = TrainingGame(path=tmp_path / "game.json", today=lambda: day)
+    said = []
+    g.say = said.append
+    g.on("clean_lap")
+    assert g.xp == XP["clean_lap"] and g.status()["badges"][0]["earned"]
+    for _ in range(3):                                    # combo: x2 on the third hit
+        g.on("drill_attempt", ok=True, corner="T1")
+    assert g.combo == 3 and g.xp == XP["clean_lap"] + XP["drill_hit"] * (1 + 1 + 2)
+    g.on("drill_attempt", ok=False)
+    assert g.combo == 0 and g.best_combo == 3
+    g.on("drill_done", corner="T1", kind="brake_ladder")
+    assert {"first_drill", "ladder"} <= set(g.badges)
+    g.on("plan_step", title="Warm-up", all_done=False)
+    g.on("plan_step", title="Push laps", all_done=True)
+    assert "plan" in g.badges and any("Level up" in s for s in said)
+    # weekly goal XP only once per ISO week
+    xp = g.xp
+    g.on("weekly_goal"); g.on("weekly_goal")
+    assert g.xp == xp + XP["weekly_goal"]
+    # daily challenge
+    d = daily_for(day)
+    before = g.xp
+    for _ in range(d["goal"]):
+        if d["event"] == "combo":
+            g.on("drill_attempt", ok=True)
+        elif d["event"] in ("cons_lap",):
+            g.on("cons_lap", inside=True, streak=1)
+        elif d["event"] == "fuel_lap":
+            g.on("fuel_lap", ok=True)
+        elif d["event"] == "drill_hit":
+            g.on("drill_attempt", ok=True)
+        else:
+            g.on(d["event"])
+    st = g.status()
+    assert st["daily"]["done"] and g.xp - before >= XP["daily"]
+    # feed is bounded, state persists
+    for _ in range(100):
+        g.on("cons_lap", inside=False)
+    assert len(g.feed) <= 25 and g.combo == 0
+    g.save()
+    g2 = TrainingGame(path=tmp_path / "game.json", today=lambda: day)
+    assert g2.xp == g.xp and g2.badges == g.badges and g2.daily_done and g2.combo == 0
+    assert g2.overlay()["level"] == level_for(g.xp)["level"]
+
+
+def test_training_hub_select_from_phone_and_widgets():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    app = create_app(eng, cfg, demo_mode=True, bind_host="0.0.0.0", port=8061)
+    phone = TestClient(app, client=("192.168.1.50", 5000))
+    xp0 = eng.game.xp
+    _drive(eng, 3.6)
+    assert eng.game.xp > xp0                                           # clean laps earn XP
+    st = phone.get("/api/training").json()
+    assert st["mode"] == "free" and st["corners"] and st["game"]["level"] >= 1 and "game" in st["feature_labels"]
+    # pages
+    for path in ("/train", "/widget/plan", "/widget/consistency", "/widget/endurance", "/widget/fuel"):
+        assert phone.get(path).status_code == 200
+    assert phone.get("/widget/nope").status_code == 404
+    # drill from the phone
+    st = phone.post("/api/training/select", json={"mode": "drill", "corner": 1, "kind": "min_speed"}).json()
+    assert st["mode"] == "drill" and st["focus"]["corner"] == 1 and st["focus"]["kind"] == "min_speed"
+    # consistency replaces the drill
+    st = phone.post("/api/training/select", json={"mode": "consistency", "window": 0.2, "goal": 10}).json()
+    assert st["mode"] == "consistency" and not st["focus"]["active"] and st["consistency"]["goal"] == 10
+    # plan: builds one and starts the first open quest
+    st = phone.post("/api/training/select", json={"mode": "plan", "minutes": 45}).json()
+    assert st["mode"] == "plan" and st["plan"][0]["status"] == "active" and not st["consistency"]["active"]
+    # fuel saving (demo has fuel) then back to free driving
+    r = phone.post("/api/training/select", json={"mode": "fuel", "fuel_mode": "target", "save_per_lap": 0.1})
+    assert r.status_code == 200 and r.json()["mode"] == "fuel" and r.json()["fuel_target"]
+    assert not any(p["status"] == "active" for p in r.json()["plan"])
+    w = phone.get("/api/widget").json()
+    assert w["race"] is not None and w["fuel_save"]
+    assert phone.post("/api/training/select", json={"mode": "free"}).json()["mode"] == "free"
+    assert eng.fuel_save is None
+    assert phone.post("/api/training/select", json={"mode": "nope"}).status_code == 422
+    # training features can be switched from the phone - other settings stay local-only
+    r = phone.post("/api/features", json={"features": {"consistency": False, "garage61_token": "x"}})
+    assert r.status_code == 200 and r.json()["features"]["consistency"] is False
+    assert "garage61_token" not in r.json()["features"]
+    assert phone.post("/api/training/select", json={"mode": "consistency"}).status_code == 409
+    assert phone.post("/api/config", json={"units": "imperial"}).status_code == 403
+    phone.post("/api/features", json={"features": {"consistency": True, "game": False}})
+    assert phone.get("/api/game").status_code == 409 and eng.overlay()["game"] is None
+    phone.post("/api/features", json={"features": {"game": True}})
+    assert eng.overlay()["game"]["level"] >= 1
+
+
+# ------------------------------------------------- v12: racing line without live GPS
+def test_racing_line_rebuilt_from_heading_and_speed():
+    """iRacing has no Lat/Lon live - the line is rebuilt from heading, speed and slip angle."""
+    from simcoach.control import _xy, aligned_latlon, line_offset
+    from simcoach.live import LapBuffer
+    ref = demo.reference_lap()
+    bump = lambda g: 3.0 * np.exp(-((g - 0.3) / 0.015) ** 2)   # noqa: E731 - 3 m wide at 30 % of the lap
+    # slip angle: heading points inside the corner; velocity vector carries the slip
+    def drive_slip(ref, offset_fn, slip_sign):
+        rx, ry = _xy(ref.lat, ref.lon, ref.lat.mean(), ref.lon.mean())
+        tx, ty = np.gradient(np.r_[rx[-1], rx, rx[0]])[1:-1], np.gradient(np.r_[ry[-1], ry, ry[0]])[1:-1]
+        n = np.hypot(tx, ty); nx, ny = -ty / n, tx / n
+        off = offset_fn(GRID); mx, my = rx + nx * off, ry + ny * off
+        pts = 20 * N_BINS
+        pp = np.linspace(0, 1, pts, endpoint=False)
+        X = np.r_[np.interp(pp, GRID, mx, period=1), mx[0]]; Y = np.r_[np.interp(pp, GRID, my, period=1), my[0]]
+        pp = np.r_[pp, 1.0]
+        ds = np.hypot(np.diff(X), np.diff(Y)); v = np.interp(pp[:-1], GRID, ref.speed, period=1)
+        travel = np.unwrap(np.arctan2(np.diff(Y), np.diff(X)))
+        curv = np.gradient(travel) / np.maximum(ds, 1e-6)
+        beta = np.clip(0.9 * curv * 25, -0.08, 0.08)          # up to ~4.5 deg, nose pointing inside
+        heading = travel + beta
+        vxs, vys = v * np.cos(beta), slip_sign * -v * np.sin(beta)
+        steer = np.interp(pp[:-1], GRID, ref.steer, period=1)
+        buf = LapBuffer(0.0); t = 0.0
+        for i in range(len(ds)):
+            buf.add({"pct": pp[i], "speed": v[i], "throttle": 0, "brake": 0, "gear": 3, "steer": steer[i],
+                     "session_time": t, "on_pit_road": False, "surface": 3, "heading": heading[i] + 0.4,
+                     "vx": vxs[i], "vy": vys[i]})
+            t += ds[i] / v[i]
+        lap = buf.to_lap(ref.track_length); lap.meta = {"line": "reconstructed"}
+        return lap, off, beta
+
+    for sign in (1, -1):                                       # slip sign convention doesn't matter
+        lap, off, beta = drive_slip(ref, bump, sign)
+        assert lap.has_map() and lap.meta["line"] == "reconstructed"
+        lo = line_offset(lap, ref)
+        err = lo["offset"] - off
+        assert abs(lo["offset"][300] - 3.0) < 0.5 and float(np.sqrt(np.mean(err ** 2))) < 0.4
+    ll = aligned_latlon(lap, ref)                              # drawn in the reference's frame
+    assert ll is not None and abs(float(np.mean(ll[0])) - float(np.mean(ref.lat))) < 1e-4
+    # a buffer without heading (old data) still has no line
+    buf = LapBuffer(0.0)
+    for i in range(2001):
+        buf.add({"pct": i / 2001, "speed": 50, "throttle": 1, "brake": 0, "gear": 4, "steer": 0,
+                 "session_time": i * 0.04, "on_pit_road": False, "surface": 3})
+    assert not buf.to_lap(4200).has_map()
+
+
+# ------------------------------------------------- v12: racecraft (real traffic)
+def _tr_run(tr, steps, me_pct, cars_pct, t0=0.0, dt=0.1, incidents=None, lr=1, elapsed0=10.0, surf=None):
+    """Drive the tracker: me_pct(t) and cars_pct(t) -> list per car."""
+    evs = []
+    for k in range(steps):
+        t = t0 + k * dt
+        pc = cars_pct(t)
+        inc = incidents(t) if callable(incidents) else incidents
+        evs += tr.update(t, 0, me_pct(t), 50.0, 3, {"pct": [me_pct(t)] + pc, "surface": surf or [3] * (len(pc) + 1),
+                                                     "pit": [False] * (len(pc) + 1)},
+                         lr, inc, elapsed0 + t, None, lap_id=0)
+    return evs
+
+
+def test_racecraft_passes_letbys_contact_and_defending():
+    from simcoach.traffic import TrafficTracker
+    drivers = {0: {"name": "Me", "number": "1", "class": "GT3", "class_id": 1, "est_lap": 90},
+               1: {"name": "Slow", "number": "21", "class": "GT3", "class_id": 1, "est_lap": 92},
+               2: {"name": "Proto", "number": "7", "class": "GTP", "class_id": 2, "est_lap": 80}}
+
+    def fresh():
+        tr = TrafficTracker()
+        tr.set_drivers(drivers, 0)
+        tr.track_length = 4000.0
+        tr.typical = lambda a, b: (b - a) * 80.0              # 50 m/s over 4 km -> 80 s per lap
+        return tr
+    me = lambda t: 0.10 + t * 50 / 4000                      # noqa: E731 - 50 m/s
+    # 1) I pass car 1 (it does 45 m/s), cleanly
+    tr = fresh()
+    evs = _tr_run(tr, 250, me, lambda t: [0.12 + t * 45 / 4000, 0.6])
+    assert [e["kind"] for e in evs] == ["clean_pass"] and tr.counts["clean_pass"] == 1
+    # 2) same pass with an incident -> not clean
+    tr = fresh()
+    evs = _tr_run(tr, 250, me, lambda t: [0.12 + t * 45 / 4000, 0.6], incidents=lambda t: 0 if t < 15 else 4)
+    kinds = [e["kind"] for e in evs]
+    assert "contact" in kinds and "dirty_pass" in kinds and tr.score() < 50
+    # 3) faster class closes, gets a warning, then a clean let-by
+    tr = fresh()
+    evs = _tr_run(tr, 300, me, lambda t: [0.9, 0.10 - 0.04 + t * 60 / 4000])
+    kinds = [e["kind"] for e in evs]
+    assert kinds[0] == "warning" and "clean_letby" in kinds
+    assert tr.status()["counts"]["clean_letby"] == 1
+    # 4) wrap-around half a lap away isn't a pass; cars in the pits are ignored
+    tr = fresh()
+    evs = _tr_run(tr, 100, lambda t: 0.1, lambda t: [0.6 + (0.0005 if t > 5 else -0.0005), 0.11],
+                  surf=[3, 3, 1])
+    assert not [e for e in evs if e["kind"] not in ("warning",)]
+    # 5) swapping places again and again with the same car is one battle
+    tr = fresh()
+    osc = lambda t: [0.10 + t * 50 / 4000 + (0.002 if (t // 6) % 2 else -0.002), 0.6]   # noqa: E731
+    evs = _tr_run(tr, 400, me, osc)
+    scored = [e for e in evs if e["kind"] in ("clean_pass", "lost_position")]
+    assert len(scored) <= 2 and tr.counts["battle_swap"] >= 2
+    # 6) same-class car sits 0.4 s behind for 25 s, then drops back -> defended
+    tr = fresh()
+    behind = lambda t: [0.10 + t * 50 / 4000 - (20 / 4000 if t < 25 else (20 + (t - 25) * 10) / 4000), 0.6]  # noqa: E731
+    evs = _tr_run(tr, 350, me, behind)
+    assert "defended" in [e["kind"] for e in evs]
+    # bounded
+    assert len(tr.events) <= 50 and len(tr._hist) <= 120
+
+
+def test_racecraft_live_demo_traffic_game_and_widget():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    xp0 = eng.game.stats["clean_pass"]
+    _drive(eng, 2.8)
+    st = client.get("/api/traffic").json()
+    kinds = [e["kind"] for e in st["events"]]
+    assert "clean_pass" in kinds and "warning" in kinds and "clean_letby" in kinds, kinds
+    assert st["score"] is not None and st["nearby"] is not None
+    assert eng.game.stats["clean_pass"] > xp0
+    assert client.get("/widget/racecraft").status_code == 200
+    assert client.get("/api/widget").json()["traffic"]["counts"]
+    assert "traffic" in eng.overlay()
+    client.post("/api/features", json={"features": {"traffic": False}})
+    assert client.get("/api/traffic").status_code == 409 and eng.overlay()["traffic"] is None
+
+
+# ------------------------------------------------- v12: race mode + race report
+def test_race_report_stints_tyres_fuel_and_takeaways(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from simcoach import race_report as rr
+    rec = rr.RaceRecorder()
+    rec.start({"track": "Spa", "car": "GT3", "driver": "Me", "session_type": "Race"})
+    rec.position(8, 5)
+    fuel = 60.0
+    for lap in range(1, 21):
+        pit = lap in (10, 11)                         # in-lap / out-lap
+        t = 120.0 + (0.08 * lap if lap <= 10 else 0.08 * (lap - 10)) + (4.0 if lap == 6 else 0)
+        fuel = fuel - 3.0 if lap != 10 else 58.0
+        if lap == 10:                                 # pit stall: tyre reading, then leave
+            rec.tyre_reading({c: {"wear": [92.0, 90.0, 91.0], "temp": [80, 85, 82]} for c in rr.CORNERS}, lap)
+            rec.tyre_reading(None, lap)
+        rec.position(8 - lap // 5, 5 - lap // 7)
+        rec.add_lap({"lap": lap, "lap_time": t, "valid": True, "pit": pit, "fuel_used": 3.0 if not pit else None,
+                     "fuel_level": fuel, "in_traffic": lap == 15})
+    assert "in the tank now" in " ".join(rec.report()["takeaways"])
+    rec.session_state(5)                              # chequered flag
+    rep = rec.report({"counts": {"clean_pass": 3, "clean_letby": 2}, "incidents": 2, "score": 92,
+                      "events": [], "traffic_lost_avg": 0.6, "traffic_laps": 1, "laps": 20})
+    assert rep["start"] == {"pos": 8, "class_pos": 5} and rep["finish"]["pos"] == 4
+    assert len(rep["stints"]) == 2 and rep["stints"][0]["to"] == 11
+    assert rep["stints"][0]["dropoff"] == pytest.approx(0.08, abs=0.02)
+    assert rep["pace"]["bad_laps"][0]["lap"] == 6
+    assert rep["fuel"]["avg"] == 3.0 and rep["fuel"]["spare"] is not None
+    assert rep["tyres"][0]["corners"]["LF"]["wear_left"] == 10.0 and rep["tyres"][0]["corners"]["LF"]["per_lap"] == 1.0
+    tk = " ".join(rep["takeaways"])
+    assert "Started P8, finished P4" in tk and "pace dropped" in tk and "Racecraft: 3 clean passes" in tk
+    assert "worst lap 6" in tk and "LF wore most" in tk and "spare" in tk
+    rec.save(rep["racecraft"])
+    lst = rr.list_reports()
+    assert lst and lst[0]["finish"]["pos"] == 4
+    assert rr.load_report(lst[0]["id"])["lap_count"] == 20
+    with pytest.raises(ValueError):
+        rr.load_report("../config")
+
+
+def test_race_mode_turns_training_off_and_records_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIMCOACH_HOME", str(tmp_path))
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False, overlay_mode="always")
+    src = DemoSource()
+    src.race = True
+    eng = LiveEngine(cfg, src)
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    eng.coach.start_focus(None)
+    eng.consistency.start(None, 0.3, 5)
+    _drive(eng, 2.8)
+    assert eng.is_race and eng.race_mode
+    assert not eng.events and eng.coach.focus.attempts == 0 and not eng.consistency.laps   # training is off
+    ov = eng.overlay()
+    assert ov["race_mode"] and ov["events"] == [] and ov["focus"] == {} and ov["game"] is None
+    assert ov["traffic"] is not None and ov["visible"]
+    r = client.get("/api/race_report").json()
+    assert r["live"] and r["lap_count"] >= 2 and r["start"]["pos"] >= 1 and r["racecraft"]["counts"]
+    assert client.get("/race-report").status_code == 200
+    assert client.get("/api/race_reports").json()                    # saved every lap
+    assert client.get("/api/training").json()["race_mode"] is True
+    # race mode off -> training back on in races
+    client.post("/api/config", json={"race_mode": False})
+    assert not eng.race_mode

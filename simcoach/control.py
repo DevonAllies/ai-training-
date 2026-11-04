@@ -44,6 +44,75 @@ def _smooth(a: np.ndarray, w: int) -> np.ndarray:
     return np.convolve(np.r_[a[-pad:], a, a[:pad]], k, mode="valid")[: len(a)]
 
 
+# Laps driven live have no GPS (iRacing only writes Lat/Lon to .ibt files), so the
+# line is rebuilt by integrating speed along the car's heading. It's stored as
+# pseudo lat/lon around (0, 0) and fitted onto the other lap before comparing.
+def _closure(px, py):
+    end_x, end_y = px[-1] + (px[-1] - px[-2]), py[-1] + (py[-1] - py[-2])
+    return end_x - px[0], end_y - py[0]
+
+
+def reconstructed_latlon(px: np.ndarray, py: np.ndarray, steer: np.ndarray | None = None,
+                         qx: np.ndarray | None = None, qy: np.ndarray | None = None):
+    """Close the integrated path into a loop and turn it into pseudo lat/lon.
+    (qx, qy) is the same path with the opposite slip-angle sign - the one that
+    closes its loop better is used."""
+    px, py = np.asarray(px, float).copy(), np.asarray(py, float).copy()
+    if len(px) < 10 or np.ptp(px) + np.ptp(py) < 50:
+        return None
+    if qx is not None and qy is not None and np.any(qx):
+        qx, qy = np.asarray(qx, float), np.asarray(qy, float)
+        if math.hypot(*_closure(qx, qy)) < math.hypot(*_closure(px, py)):
+            px, py = qx.copy(), qy.copy()
+    # loop closure: the end should come back to the start - spread the error along the lap
+    seg = np.hypot(np.diff(px), np.diff(py))
+    ex, ey = _closure(px, py)
+    frac = np.r_[0.0, np.cumsum(seg)] / max(float(seg.sum()), 1e-6)
+    px -= ex * frac
+    py -= ey * frac
+    # handedness: path curvature must turn the same way as the steering (left = +)
+    if steer is not None and np.any(steer):
+        tx, ty = _circ_grad(px), _circ_grad(py)
+        curv = tx * _circ_grad(ty) - ty * _circ_grad(tx)
+        if float(np.dot(_smooth(curv, 9), steer)) < 0:
+            py = -py
+    return py / 110540.0, px / 111320.0
+
+
+def _align(mx, my, rx, ry):
+    """Best rigid fit (rotation, optional mirror, shift) of path m onto path r."""
+    best = None
+    for mirror in (False, True):
+        ax, ay = mx - mx.mean(), (-my if mirror else my) - (-my if mirror else my).mean()
+        bx, by = rx - rx.mean(), ry - ry.mean()
+        th = math.atan2(float(np.sum(ax * by - ay * bx)), float(np.sum(ax * bx + ay * by)))
+        c, s_ = math.cos(th), math.sin(th)
+        fx, fy = ax * c - ay * s_ + rx.mean(), ax * s_ + ay * c + ry.mean()
+        err = float(np.mean((fx - rx) ** 2 + (fy - ry) ** 2))
+        if best is None or err < best[0]:
+            best = (err, fx, fy)
+    return best[1], best[2]
+
+
+def aligned_xy(me: Lap, ref: Lap):
+    """Both laps in metres in the reference's frame (my path fitted when it was rebuilt)."""
+    lat0, lon0 = float(np.mean(ref.lat)), float(np.mean(ref.lon))
+    rx, ry = _xy(ref.lat, ref.lon, lat0, lon0)
+    mx, my = _xy(me.lat, me.lon, lat0, lon0)
+    if (me.meta or {}).get("line") == "reconstructed" or (ref.meta or {}).get("line") == "reconstructed":
+        mx, my = _xy(me.lat, me.lon, float(np.mean(me.lat)), float(np.mean(me.lon)))
+        mx, my = _align(mx, my, rx, ry)
+    return mx, my, rx, ry, lat0, lon0
+
+
+def aligned_latlon(me: Lap, ref: Lap):
+    """My lat/lon drawn in the reference's frame (for the line map)."""
+    if not (me.has_map() and ref.has_map()):
+        return None
+    mx, my, _, _, lat0, lon0 = aligned_xy(me, ref)
+    return my / 110540.0 + lat0, mx / (math.cos(math.radians(lat0)) * 111320.0) + lon0
+
+
 def line_offset(me: Lap, ref: Lap) -> dict | None:
     """Lateral offset of your line from the reference line (metres).
 
@@ -53,9 +122,7 @@ def line_offset(me: Lap, ref: Lap) -> dict | None:
     """
     if not (me.has_map() and ref.has_map()):
         return None
-    lat0, lon0 = float(np.mean(ref.lat)), float(np.mean(ref.lon))
-    rx, ry = _xy(ref.lat, ref.lon, lat0, lon0)
-    mx, my = _xy(me.lat, me.lon, lat0, lon0)
+    mx, my, rx, ry, _, _ = aligned_xy(me, ref)
     tx, ty = _circ_grad(rx), _circ_grad(ry)
     norm = np.hypot(tx, ty)
     ok = norm > 1e-6

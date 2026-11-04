@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1216">
+<title>SimCoach Widget</title>
+<!--
+  Small single-purpose widgets for a phone, tablet, second monitor or OBS:
+    /widget/plan         practice plan as a game (quests, XP, combo, daily challenge)
+    /widget/consistency  consistency trainer (streak ring, lap dots)
+    /widget/endurance    race / endurance (fuel, laps to go, stops, pit window)
+    /widget/fuel         fuel saving (target per lap, laps on target)
+    /widget/racecraft    traffic around you, clean passes / let-bys, faster-car warnings
+  ?transparent=1 for an OBS browser source, ?readonly=1 hides the buttons.
+-->
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/static/game.css">
+<style>
+  html, body { margin: 0; background: var(--g-bg); color: var(--g-text); font: 15px/1.4 "Segoe UI", system-ui, sans-serif; }
+  body.transparent { background: transparent; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .card { background: var(--g-card); border: 1px solid var(--g-line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  body.transparent .card { background: rgba(13,16,20,.86); }
+  .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
+  .head h1 { font-size: 16px; margin: 0; letter-spacing: .4px; }
+  .head a { color: var(--g-muted); font-size: 12px; text-decoration: none; }
+  .grow { flex: 1; }
+  .big { font: 800 34px/1.1 Consolas, monospace; }
+  .k { color: var(--g-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  .good { color: var(--g-good); } .bad { color: var(--g-bad); } .gold { color: var(--g-gold); }
+  .msg { color: var(--g-muted); font-size: 13px; margin-top: 8px; min-height: 1em; }
+  .msg.err { color: var(--g-bad); }
+  button { background: #232a33; color: var(--g-text); border: 1px solid var(--g-line); border-radius: 10px; padding: 10px 14px; font-size: 14px; cursor: pointer; }
+  button.primary { background: var(--g-blue); border-color: var(--g-blue); color: #04121f; font-weight: 700; }
+  button.small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+  .btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .btns button { flex: 1; }
+  body.readonly .btns, body.readonly [data-quest], body.readonly [data-quest-done] { display: none; }
+  .off { text-align: center; color: var(--g-muted); padding: 30px 10px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid2 > div { background: #11161c; border: 1px solid var(--g-line); border-radius: 10px; padding: 8px 10px; }
+  .grid2 .v { font: 800 22px/1.2 Consolas, monospace; }
+  .laps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
+  .laps span { font: 700 11px Consolas, monospace; padding: 3px 6px; border-radius: 6px; background: #1d232b; }
+  .laps span.ok { background: #143a26; color: var(--g-good); }
+  .laps span.no { background: #3d1c1f; color: var(--g-bad); }
+  .rc-warn { background: #241b38; border: 1px solid var(--g-purple); border-radius: 10px; padding: 10px; margin-bottom: 12px; font-weight: 600; }
+  .rc-bar { position: relative; height: 34px; background: #0b0e12; border: 1px solid var(--g-line); border-radius: 10px; margin: 6px 0 10px; }
+  .rc-me { position: absolute; left: 50%; top: 4px; transform: translateX(-50%); background: var(--g-good); color: #04170d; font: 800 11px/24px Consolas, monospace; padding: 0 6px; border-radius: 6px; }
+  .rc-car { position: absolute; top: 5px; transform: translateX(-50%); min-width: 22px; text-align: center; color: #fff; font: 700 11px/22px Consolas, monospace; padding: 0 4px; border-radius: 6px; transition: left .9s linear; }
+  .rc-list div { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid var(--g-line); font-size: 14px; }
+  .rc-list b { font-family: Consolas, monospace; }
+  .rc-events { margin-top: 10px; font-size: 13px; }
+  .rc-events div { padding: 3px 0; }
+  .tank { height: 16px; border-radius: 99px; background: #0b0e12; border: 1px solid var(--g-line); overflow: hidden; margin-top: 6px; }
+  .tank i { display: block; height: 100%; background: linear-gradient(90deg, #d99a1e, var(--g-gold)); transition: width .6s; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><h1 id="w-title">SimCoach</h1><a href="/train">Training hub ›</a></div>
+  <div id="w-body" class="card"><div class="off">Loading…</div></div>
+  <div id="w-msg" class="msg"></div>
+</div>
+<script src="/static/game.js"></script>
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  if (q.get("transparent") === "1") document.body.classList.add("transparent");
+  if (q.get("readonly") === "1") document.body.classList.add("readonly");
+  const name = location.pathname.split("/").filter(Boolean).pop();
+  const TITLES = { plan: "Training quest", consistency: "Consistency", endurance: "Endurance", fuel: "Fuel saving", racecraft: "Racecraft" };
+  const FEATURE = { plan: "practice", consistency: "consistency", endurance: "endurance", fuel: "endurance", racecraft: "traffic" };
+  document.getElementById("w-title").textContent = TITLES[name] || "SimCoach";
+  document.title = "SimCoach · " + (TITLES[name] || "Widget");
+  const body = document.getElementById("w-body"), msg = document.getElementById("w-msg");
+  const esc = SC.esc;
+  let st = null, busy = false, lastHtml = "";
+
+  const say = (t, err) => { msg.textContent = t || ""; msg.className = "msg" + (err ? " err" : ""); };
+  async function act(payload) {
+    if (busy) return;
+    busy = true; say("…");
+    try { await SC.api("/api/training/select", payload); say(""); await tick(); }
+    catch (e) { say(e.message, true); }
+    finally { busy = false; }
+  }
+  body.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-act]");
+    if (b) act(JSON.parse(b.dataset.act));
+  });
+  SC.bindQuests(body, (e) => { if (e) say(e.message, true); else tick(); });
+
+  const btn = (label, payload, primary) => `<button ${primary ? 'class="primary"' : ""} data-act='${esc(JSON.stringify(payload))}'>${label}</button>`;
+
+  // ------------------------------------------------------------ widgets
+  function plan(s) {
+    const g = s.game;
+    const header = g ? SC.gameHeader(g) : `<p class="k">Training game is off (Settings → Training features).</p>`;
+    const active = s.mode === "plan";
+    return header + SC.questPath(s, { controls: true }) +
+      `<div class="btns">${active ? btn("Stop", { mode: "free" }) : btn((s.plan || []).length ? "Continue quest" : "Start practice plan", { mode: "plan" }, true)}</div>` +
+      (g ? `<details style="margin-top:12px"><summary class="k">Badges ${g.badge_count}/${g.badges.length}</summary>${SC.badges(g)}</details>${SC.feed(g)}` : "");
+  }
+
+  function consistency(s) {
+    const c = s.consistency || {};
+    const goal = c.goal || 5, streak = c.streak || 0;
+    const dots = (c.recent || []).map((l) => `<i class="${l.inside == null ? "na" : l.inside ? "in" : "out"}" title="${esc(l.why || "")}">${l.delta == null ? "" : (l.delta > 0 ? "+" : "") + l.delta.toFixed(1)}</i>`).join("");
+    const last = (c.recent || []).slice(-1)[0];
+    return `<div class="g-ring" style="--p:${Math.min(100, (100 * streak) / goal)}"><div><div><b class="${c.completed ? "good" : ""}">${streak}</b><div class="k">of ${goal} in a row</div></div></div></div>
+      <div style="text-align:center;margin-top:10px">
+        <div class="k">Target</div><div class="big" style="font-size:24px">${c.target ? SC.fmtT(c.target) : "–"} <small class="k">±${(c.window || 0.3).toFixed(2)}s</small></div></div>
+      <div class="g-dots">${dots || '<span class="k">No laps yet</span>'}</div>
+      ${last && last.why ? `<div class="msg" style="text-align:center">Last lap: ${esc(last.why)}</div>` : ""}
+      <div class="g-row"><div class="g-tile"><div class="k">Score</div><div class="v">${c.score ?? "–"}</div></div>
+        <div class="g-tile"><div class="k">Spread</div><div class="v">${c.stdev != null ? "±" + c.stdev.toFixed(2) : "–"}</div></div>
+        <div class="g-tile"><div class="k">Best run</div><div class="v">${c.best_streak || 0}</div></div></div>
+      <div class="msg">${esc(c.message || "")}</div>
+      <div class="btns">${c.active ? btn("Stop", { mode: "free" }) :
+        btn("Start (±0.3s, 5 laps)", { mode: "consistency", window: 0.3, goal: 5 }, true) + btn("Hard (±0.2s, 10)", { mode: "consistency", window: 0.2, goal: 10 })}</div>`;
+  }
+
+  function endurance(s) {
+    const r = s.race || {};
+    const f = r.fuel_level, tank = r.tank;
+    const pw = r.pit_window;
+    return `<div class="k">Fuel</div><div class="big">${f != null ? f.toFixed(1) + " L" : "–"}</div>
+      ${tank && f != null ? `<div class="tank"><i style="width:${Math.min(100, (100 * f) / tank)}%"></i></div>` : ""}
+      <div class="grid2" style="margin-top:12px">
+        <div><div class="k">Laps of fuel</div><div class="v">${r.laps_of_fuel ?? "–"}</div></div>
+        <div><div class="k">Laps to go</div><div class="v">${r.laps_to_go ?? "–"}</div></div>
+        <div><div class="k">Fuel / lap</div><div class="v">${r.fuel_per_lap ? r.fuel_per_lap.toFixed(2) : "–"}</div></div>
+        <div><div class="k">Fuel to finish</div><div class="v ${r.fuel_to_finish > 0 ? "bad" : "good"}">${r.fuel_to_finish ?? "–"}</div></div>
+        <div><div class="k">Stops</div><div class="v">${r.stops_needed ?? "–"}</div></div>
+        <div><div class="k">Pit window</div><div class="v">${pw ? `L${pw.open}–${pw.close}` : "–"}</div></div>
+        <div><div class="k">Stint avg</div><div class="v" style="font-size:18px">${SC.fmtT(r.stint_avg)}</div></div>
+        <div><div class="k">Time left</div><div class="v" style="font-size:18px">${s.time_left ? Math.floor(s.time_left / 60) + " min" : "–"}</div></div>
+      </div>
+      ${r.dropoff != null ? `<div class="msg">Pace drop-off: ${r.dropoff > 0 ? "+" : ""}${r.dropoff.toFixed(3)} s/lap</div>` : ""}
+      <div class="laps">${(r.laps || []).slice(-12).map((l) => `<span class="${l.valid ? "" : "no"}">${SC.fmtT(l.lap_time)}${l.fuel ? " · " + l.fuel.toFixed(2) : ""}</span>`).join("")}</div>
+      <div class="btns">${s.fuel_save ? btn("Stop fuel saving", { mode: "free" }) : btn("Save fuel for +1 lap", { mode: "fuel", fuel_mode: "extra_lap" }, true)}</div>`;
+  }
+
+  function fuel(s) {
+    const fu = s.fuel || {}, g = s.game;
+    const laps = (s.last_laps || []).filter((l) => l.fuel_ok !== undefined && l.fuel_ok !== null);
+    const hits = laps.filter((l) => l.fuel_ok).length;
+    if (!s.fuel_save) {
+      return `<p>Lift and coast before the braking points to stretch the tank. The coach tells you where to lift; you score XP for every lap on the fuel target.</p>
+        <div class="grid2"><div><div class="k">Fuel</div><div class="v">${fu.level ?? "–"}</div></div><div><div class="k">Per lap</div><div class="v">${fu.per_lap ? fu.per_lap.toFixed(2) : "–"}</div></div></div>
+        <div class="btns">${btn("Extra lap", { mode: "fuel", fuel_mode: "extra_lap" }, true)}${btn("Save 0.1 L/lap", { mode: "fuel", fuel_mode: "target", save_per_lap: 0.1 })}</div>`;
+    }
+    const tgt = s.fuel_target;
+    return `<div class="k">Target per lap</div><div class="big gold">${tgt ? tgt.toFixed(2) + " L" : "–"}</div>
+      <div class="grid2" style="margin-top:12px">
+        <div><div class="k">Fuel now</div><div class="v">${fu.level ?? "–"}</div></div>
+        <div><div class="k">Laps of fuel</div><div class="v">${fu.laps ?? "–"}</div></div>
+        <div><div class="k">Avg per lap</div><div class="v">${fu.per_lap ? fu.per_lap.toFixed(2) : "–"}</div></div>
+        <div><div class="k">On target</div><div class="v ${hits ? "good" : ""}">${hits}/${laps.length}</div></div>
+      </div>
+      ${g ? `<div class="g-row"><div class="g-tile g-combo ${g.combo >= 3 ? "hot" : ""}"><div class="k">Combo</div><div class="v">${g.combo}${g.mult > 1 ? " x" + g.mult : ""}</div></div></div>` : ""}
+      <div class="laps">${laps.map((l) => `<span class="${l.fuel_ok ? "ok" : "no"}">L${l.lap} ${l.fuel_used.toFixed(2)}</span>`).join("")}</div>
+      <div class="btns">${btn("Stop fuel saving", { mode: "free" })}</div>`;
+  }
+
+  function racecraft(s) {
+    const t = s.traffic || {}, c = t.counts || {}, g = s.game;
+    const near = t.nearby || [];
+    const bar = near.map((n) => {
+      const pos = Math.max(2, Math.min(98, 50 + (n.gap_s / 4) * 48));      // ±4 s across the bar
+      const col = n.faster ? "var(--g-purple)" : n.faster === false ? "#5b6472" : "var(--g-blue)";
+      return `<div class="rc-car" style="left:${pos}%;background:${col}" title="${esc(n.name)}">${esc(n.number || "")}</div>`;
+    }).join("");
+    const w = t.warning;
+    const ev = (t.events || []).filter((e) => e.kind !== "warning").slice().reverse().slice(0, 6);
+    return `${w ? `<div class="rc-warn">⚠ Faster ${esc(w.class || "car")} ${w.gap_s}s behind${w.corner ? ` – catches you at <b>${esc(w.corner)}</b>` : ""}</div>` : ""}
+      <div class="k">Around you <span style="float:right">behind ◀ ▶ ahead</span></div>
+      <div class="rc-bar"><div class="rc-me">YOU</div>${bar}</div>
+      <div class="rc-list">${near.length ? near.map((n) => `<div><span>#${esc(n.number)} ${esc(n.class || "")} <small class="k">${esc(n.name || "")}</small></span>
+        <b class="${n.faster ? "gold" : ""}">${n.gap_s > 0 ? "+" : ""}${n.gap_s.toFixed(1)}s</b></div>`).join("") : '<div class="k">No cars within 4 s</div>'}</div>
+      <div class="g-row">
+        <div class="g-tile"><div class="k">Racecraft</div><div class="v ${t.score >= 80 ? "good" : t.score != null && t.score < 50 ? "bad" : ""}">${t.score ?? "–"}</div></div>
+        <div class="g-tile"><div class="k">Clean passes</div><div class="v">${c.clean_pass || 0}</div></div>
+        <div class="g-tile"><div class="k">Clean let-bys</div><div class="v">${c.clean_letby || 0}</div></div>
+        <div class="g-tile"><div class="k">Defended</div><div class="v">${c.defended || 0}</div></div>
+        <div class="g-tile"><div class="k">Incidents</div><div class="v ${t.incidents ? "bad" : ""}">${t.incidents || 0}x</div></div>
+        ${g ? `<div class="g-tile g-combo ${g.combo >= 3 ? "hot" : ""}"><div class="k">Combo</div><div class="v">${g.combo}${g.mult > 1 ? " x" + g.mult : ""}</div></div>` : ""}
+      </div>
+      ${t.traffic_lost_avg != null ? `<div class="msg">Traffic laps cost you ${t.traffic_lost_avg.toFixed(2)}s on average (${t.traffic_laps} of ${t.laps} laps)</div>` : ""}
+      <div class="rc-events">${ev.map((e) => `<div class="${e.ok ? "good" : e.ok === false ? "bad" : ""}">${e.ok ? "✓" : e.ok === false ? "✗" : "·"} ${esc(e.text)}</div>`).join("") ||
+        '<div class="k">Passes, let-bys and defending show up here. Works in races, AI races and open practice.</div>'}</div>`;
+  }
+
+  const RENDER = { plan, consistency, endurance, fuel, racecraft };
+
+  async function tick() {
+    try { st = await SC.api("/api/widget"); }
+    catch (e) { body.innerHTML = lastHtml = `<div class="off">SimCoach isn't reachable.<br><small>${esc(e.message)}</small></div>`; return; }
+    if (!RENDER[name]) { body.innerHTML = `<div class="off">Unknown widget</div>`; return; }
+    if (st.features && st.features[FEATURE[name]] === false) {
+      body.innerHTML = lastHtml = `<div class="off">This training is switched off.<br><a href="/train" style="color:var(--g-blue)">Turn it on in the training hub</a></div>`;
+      return;
+    }
+    const html = RENDER[name](st);
+    if (html !== lastHtml) {                 // only touch the DOM when something changed (taps don't get lost)
+      const open = body.querySelector("details")?.open;
+      body.innerHTML = lastHtml = html;
+      if (open && body.querySelector("details")) body.querySelector("details").open = true;
+    }
+    SC.toasts(st.game);
+  }
+  tick();
+  setInterval(() => { if (!document.hidden) tick(); }, 1000);
+})();
+</script>
+</body>
+</html>

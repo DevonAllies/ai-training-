@@ -13,6 +13,7 @@ lap and produce coaching feedback as you drive:
 from __future__ import annotations
 
 import collections
+import os
 import logging
 import math
 import re
@@ -30,6 +31,9 @@ from .analysis import (MS_TO_KMH, Corner, _brake_on, _throttle_on, compare_corne
 from . import history
 from .coach import SessionCoach
 from .consistency import ConsistencyTrainer
+from .game import TrainingGame
+from .traffic import TrafficTracker
+from .race_report import RaceRecorder
 from .race import RaceTracker, extra_lap_target, lift_plan
 from .config import Config, laps_dir
 from .corners import apply_names
@@ -106,6 +110,9 @@ class IRacingSource(TelemetrySource):
                 surface=int(ir["PlayerTrackSurface"]),   # 0 = off track, 3 = on track
                 last_lap_time=float(ir["LapLastLapTime"] or 0.0),
                 yaw=_f(ir["YawRate"]),
+                heading=_f(ir["Yaw"]),                          # world heading - rebuilds the line live
+                vx=_f(ir["VelocityX"]),                         # car-frame velocity -> slip angle
+                vy=_f(ir["VelocityY"]),
                 latacc=_f(ir["LatAccel"]),
                 rpm=_f(ir["RPM"]),
                 abs=_f(ir["BrakeABSactive"]),
@@ -114,9 +121,44 @@ class IRacingSource(TelemetrySource):
                 time_remain=_f(ir["SessionTimeRemain"], -1.0),
                 laps_remain=_f(ir["SessionLapsRemainEx"], -1.0),
                 track_temp=_f(ir["TrackTempCrew"]),
+                session_state=int(_f(ir["SessionState"])),
+                traffic=self._traffic(ir),
+                **self._tyres(ir),
             )
         finally:
             ir.unfreeze_var_buffer_latest()
+
+    @staticmethod
+    def _tyres(ir) -> dict:
+        """Tyre wear (% tread left, inner/middle/outer) and carcass temps - iRacing only
+        sends these while the car is in its pit stall."""
+        try:
+            if not ir["PlayerCarInPitStall"]:
+                return {"in_stall": False}
+            out = {}
+            for c in ("LF", "RF", "LR", "RR"):
+                wear = [_f(ir[f"{c}wear{x}"]) for x in "LMR"]
+                if wear and max(wear) <= 1.0:          # fraction -> percent
+                    wear = [w * 100 for w in wear]
+                out[c] = {"wear": [round(w, 1) for w in wear],
+                          "temp": [round(_f(ir[f"{c}temp{x}"]), 1) for x in ("CL", "CM", "CR")]}
+            return {"in_stall": True, "tyres": out}
+        except (KeyError, TypeError, ValueError):
+            return {"in_stall": False}
+
+    @staticmethod
+    def _traffic(ir) -> dict | None:
+        """Every car's lap position / surface / pit flag, the spotter flag and my incident count."""
+        try:
+            return {"me": int(ir["PlayerCarIdx"] or 0),
+                    "pct": list(ir["CarIdxLapDistPct"] or []),
+                    "surface": list(ir["CarIdxTrackSurface"] or []),
+                    "pit": list(ir["CarIdxOnPitRoad"] or []),
+                    "left_right": int(ir["CarLeftRight"] or 1),
+                    "incidents": ir["PlayerCarMyIncidentCount"],
+                    "position": ir["PlayerCarPosition"], "class_position": ir["PlayerCarClassPosition"]}
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def session(self) -> dict:
         ir = self.ir
@@ -147,6 +189,13 @@ class IRacingSource(TelemetrySource):
             "session_lengths": {int(s.get("SessionNum", i)): {"laps": s.get("SessionLaps"),
                                                               "time": s.get("SessionTime")}
                                 for i, s in enumerate(sessions)},
+            "my_idx": drv.get("DriverCarIdx"),
+            "drivers": {int(d.get("CarIdx", -1)): {
+                "name": d.get("UserName", ""), "number": str(d.get("CarNumber", "")),
+                "class": d.get("CarClassShortName") or d.get("CarScreenNameShort") or "",
+                "class_id": d.get("CarClassID"), "est_lap": _f(d.get("CarClassEstLapTime")) or None,
+                "pace": bool(d.get("CarIsPaceCar")), "spectator": bool(d.get("IsSpectator"))}
+                for d in drv.get("Drivers", []) or []},
         }
         return self._session_cache
 
@@ -166,6 +215,17 @@ class DemoSource(TelemetrySource):
         self.lap = 0
         self._new_profile()
         self._last = time.monotonic()
+        _r = demo.reference_lap()
+        self._ref_v, self._ref_t = _r.speed, _r.lap_time
+        # demo traffic: (idx, name, number, class, class_id, lap time, start pct)
+        self.cars = [
+            [1, "Fast Prototype", "7", "GTP", 2, 79.0, 0.62],
+            [2, "Slow Sam", "21", "GT3", 1, 95.0, 0.985],
+            [3, "Close Carla", "44", "GT3", 1, 89.6, 0.925],
+            [4, "Rookie GT4", "88", "GT4", 3, 101.0, 0.20],
+        ]
+        self._laps = {c[0]: 0 for c in self.cars}       # demo cars' completed laps (for positions)
+        self.race = bool(os.environ.get("SIMCOACH_DEMO_RACE"))
 
     def _new_profile(self):
         self._lapno = getattr(self, "_lapno", 0) + 1
@@ -205,14 +265,39 @@ class DemoSource(TelemetrySource):
             "yaw": at(self._yaw), "latacc": at(self._latacc), "rpm": at(self._rpm), "abs": at(self._abs),
             "fuel": self.fuel_level, "fuel_per_hour": (0.002 + 0.045 * thr) * 3600 * 0.75,
             "time_remain": max(0.0, 6 * 3600 - self.session_time), "laps_remain": -1.0, "track_temp": 30.0,
+            "traffic": self._traffic(dt),
         }
+
+    def _traffic(self, dt: float) -> dict:
+        pct = [self.pct] + [0.0] * len(self.cars)
+        lr = 1
+        ref = self._ref_v
+        for c in self.cars:                     # follow a real speed profile, scaled to the car's pace
+            v = float(np.interp(c[6], GRID, ref, period=1.0)) * self._ref_t / c[5]
+            nxt = c[6] + v * dt / demo.TRACK_LENGTH
+            if nxt >= 1.0:
+                self._laps[c[0]] += 1
+            c[6] = nxt % 1.0
+            pct[c[0]] = c[6]
+            r = ((c[6] - self.pct + 0.5) % 1.0) - 0.5
+            if abs(r * demo.TRACK_LENGTH) < 6:
+                lr = 2 if lr == 1 else 4
+        mine = self.lap + self.pct
+        ahead = [c for c in self.cars if self._laps[c[0]] + c[6] > mine]
+        return {"me": 0, "pct": pct, "surface": [3] * len(pct), "pit": [False] * len(pct),
+                "left_right": lr, "incidents": 0, "position": 1 + len(ahead),
+                "class_position": 1 + sum(1 for c in ahead if c[4] == 1)}
 
     def session(self) -> dict:
         return {"track": "Demo Ring", "track_config": "GP", "track_id": None,
                 "track_length": demo.TRACK_LENGTH, "car": "Demo GT3", "car_id": None,
-                "driver": "You", "session_types": {0: "Practice"},
+                "driver": "You", "session_types": {0: "Race" if self.race else "Practice"},
                 "sectors": [0.0, 0.25, 0.5, 0.75], "fuel_max_l": demo.FUEL_TANK_L,
-                "session_lengths": {0: {"laps": "unlimited", "time": "21600.0000 sec"}}}
+                "session_lengths": {0: {"laps": "unlimited", "time": "21600.0000 sec"}},
+                "my_idx": 0,
+                "drivers": {0: {"name": "You", "number": "1", "class": "GT3", "class_id": 1, "est_lap": 90.0},
+                            **{c[0]: {"name": c[1], "number": c[2], "class": c[3], "class_id": c[4],
+                                      "est_lap": c[5]} for c in self.cars}}}
 
 
 def _f(v, default: float = 0.0) -> float:
@@ -235,7 +320,7 @@ class LapBuffer:
     """Fills the distance grid as samples arrive."""
 
     CH = ("speed", "throttle", "brake", "gear", "steer", "lat", "lon", "time",
-          "yaw", "latacc", "rpm", "abs", "fuel")
+          "yaw", "latacc", "rpm", "abs", "fuel", "px", "py", "qx", "qy")
 
     def __init__(self, start_session_time: float | None):
         self.start = start_session_time
@@ -246,6 +331,7 @@ class LapBuffer:
         self.max_bin = -1
         self.pit = False                 # lap touched the pit lane
         self.fuel_start: float | None = None
+        self.dead_reckoned = False       # line rebuilt from heading + speed (no live GPS)
 
     def add(self, s: dict) -> None:
         if s["on_pit_road"] or s["surface"] == 0:
@@ -259,6 +345,26 @@ class LapBuffer:
             return
         s = dict(s, time=s["session_time"] - self.start)
         p0 = self.prev
+        if s.get("heading") is not None and not s.get("lat"):
+            # iRacing has no GPS in live telemetry: integrate speed along the direction of travel
+            # (heading + slip angle). The slip sign isn't documented, so both are integrated
+            # (p = +slip, q = -slip) and the path that closes its loop better is used.
+            vx, vy = s.get("vx") or 0.0, s.get("vy") or 0.0
+            beta = math.atan2(vy, vx) if vx > 3.0 else 0.0
+            s["beta"] = max(-0.4, min(0.4, beta))
+            if p0 is None or "px" not in p0:
+                s["px"] = s["py"] = s["qx"] = s["qy"] = 0.0
+            else:
+                dt = s["time"] - p0["time"]
+                ds = 0.5 * (p0["speed"] + s["speed"]) * dt if 0 < dt < 0.5 else 0.0
+                h0, h1 = p0.get("heading", s["heading"]), s["heading"]
+                b0, b1 = p0.get("beta", 0.0), s["beta"]
+                for kx, ky, sg in (("px", "py", 1.0), ("qx", "qy", -1.0)):
+                    a0, a1 = h0 + sg * b0, h1 + sg * b1
+                    cx, cy = math.cos(a0) + math.cos(a1), math.sin(a0) + math.sin(a1)
+                    n = math.hypot(cx, cy) or 1.0
+                    s[kx], s[ky] = p0[kx] + ds * cx / n, p0[ky] + ds * cy / n
+            self.dead_reckoned = True
         self.prev = s
         if p0 is None or "time" not in p0:
             return
@@ -286,6 +392,11 @@ class LapBuffer:
         def opt(k):                                   # extra channels: None if the source never sent them
             a = arr[k]
             return a if np.any(a != 0) else None
+        if self.dead_reckoned and not np.any(arr["lat"]):
+            from .control import reconstructed_latlon
+            ll = reconstructed_latlon(arr["px"], arr["py"], arr["steer"], arr["qx"], arr["qy"])
+            if ll is not None:
+                arr["lat"], arr["lon"] = ll
         return Lap(speed=np.clip(arr["speed"], 0.5, None), throttle=arr["throttle"],
                    brake=arr["brake"], time=np.maximum.accumulate(arr["time"]), gear=arr["gear"],
                    steer=arr["steer"], lat=arr["lat"], lon=arr["lon"], yaw=opt("yaw"),
@@ -444,6 +555,16 @@ class LiveEngine:
         self.history_laps: collections.deque[dict] = collections.deque(maxlen=history.MAX_LAPS)
         self.coach = SessionCoach(VoiceCoach(native=config.voice_native))
         self.coach.focus.target = config.focus_target
+        self.game = TrainingGame()
+        self.game.say = lambda text: None if self.race_mode else self.coach._say(text, important=True)
+        self.coach.listener = self._game_event
+        self._beat_ref = ""                        # reference label already beaten (XP once per reference)
+        self.traffic = TrafficTracker()
+        self.race_rec = RaceRecorder()
+        self._race_key = None
+        self.traffic.typical = self._typical_time
+        self._traffic_t = -1.0
+        self._clean_times: collections.deque = collections.deque(maxlen=5)   # time arrays of clean laps
         self.status_msg = "Waiting for iRacing…"
         self._next_corner = 0
 
@@ -554,13 +675,17 @@ class LiveEngine:
                 changed = (sess.get("track"), sess.get("car")) != \
                     (self.session.get("track"), self.session.get("car"))
                 self.session = sess
+                self.traffic.set_drivers(sess.get("drivers") or {}, sess.get("my_idx"))
+                self.traffic.track_length = sess.get("track_length") or self.track_length()
                 if changed:
+                    self.traffic.reset()
                     self.best_live_sectors = None
                     self.race.reset()
                     self.fuel_save = None
                     self.history_id = None
                     self.history_laps.clear()
                     self.drive_s = 0.0
+                    self.game.new_session()
                     if self.ref_corners:
                         apply_names(self.ref_corners, self.track_name())
                     if self.on_session_change:
@@ -586,6 +711,15 @@ class LiveEngine:
     @property
     def is_practice(self) -> bool:
         return self.session_type.lower() in PRACTICE_TYPES
+
+    @property
+    def is_race(self) -> bool:
+        return "race" in self.session_type.lower()
+
+    @property
+    def race_mode(self) -> bool:
+        """In a race with race mode on: no training, just racing info and the race report."""
+        return bool(self.config.race_mode) and self.is_race
 
     def sector_starts(self) -> list[float]:
         return self.session.get("sectors") or []
@@ -632,13 +766,75 @@ class LiveEngine:
         if self.buf is None:
             self.buf = LapBuffer(None)
         self.buf.add(s)
+        racing = self.race_mode
         if self.buf.start is not None:
             if self.config.on("sectors"):
                 self._check_sectors(prev, s)
-            if self.config.on("live_feedback"):
+            if self.config.on("live_feedback") and not racing:
                 self._check_phases(s)
-            self._check_cues(s["pct"])
-        self._check_corner(s["pct"])
+            if not racing:
+                self._check_cues(s["pct"])
+        self._check_corner(s["pct"], coach=not racing)
+        self._check_traffic(s)
+        self._record_race(s)
+
+    # ------------------------------------------------------------ race report
+    def _record_race(self, s: dict) -> None:
+        if not self.is_race:
+            return
+        key = (self.session.get("track"), self.session.get("car"), self.session_num)
+        if key != self._race_key:
+            self._race_key = key
+            self.race_rec.start({"track": self.track_name(), "car": self.session.get("car", ""),
+                                 "driver": self.session.get("driver", ""), "session_type": self.session_type})
+            self.traffic.reset()
+        tr = s.get("traffic") or {}
+        self.race_rec.position(tr.get("position"), tr.get("class_position"))
+        self.race_rec.session_state(s.get("session_state"))
+        self.race_rec.tyre_reading(s.get("tyres") if s.get("in_stall") else None, self.lap_count)
+
+    # ------------------------------------------------------------- racecraft
+    TRAFFIC_GAME = {"clean_pass": "clean_pass", "clean_letby": "clean_letby", "defended": "defended",
+                    "contact": "contact", "dirty_pass": "contact"}
+
+    def _typical_time(self, a: float, b: float) -> float | None:
+        """Your usual time from lap position a to b (median of recent clean laps; else the reference)."""
+        if b <= a:
+            return None
+        laps = list(self._clean_times) or ([self.session_best.time] if self.session_best is not None else []) \
+            or ([self.reference.time] if self.reference is not None else [])
+        if not laps:
+            return None
+        vals = sorted(float(np.interp(b, GRID, t) - np.interp(a, GRID, t)) for t in laps)
+        return vals[len(vals) // 2]
+
+    def _check_traffic(self, s: dict) -> None:
+        tr = s.get("traffic")
+        if not tr or not self.config.on("traffic") or s["session_time"] - self._traffic_t < 0.1:
+            return
+        self._traffic_t = s["session_time"]
+        if not self.traffic.drivers and self.session.get("drivers"):
+            self.traffic.set_drivers(self.session["drivers"], self.session.get("my_idx"))
+            self.traffic.track_length = self.track_length()
+        buf = self.buf
+        elapsed = s["session_time"] - buf.start if buf is not None and buf.start is not None else None
+        names = {i: c.title for i, c in enumerate(self.ref_corners)}
+
+        def corner_at(pct: float) -> str | None:
+            if not self.ref_corners:
+                return None
+            for c in self.ref_corners:
+                if GRID[c.start] <= pct <= GRID[c.end]:
+                    return c.title or c.name
+            return names.get(self._corner_after(pct) % len(self.ref_corners))
+        evs = self.traffic.update(s["session_time"], tr.get("me", 0), s["pct"], s["speed"], s.get("surface", 3),
+                                  tr, tr.get("left_right", 1), tr.get("incidents"), elapsed, corner_at,
+                                  lap_id=self.lap_count)
+        for e in evs:
+            if e.get("say"):
+                self.coach._say(e["say"], important=True)
+            if e["kind"] in self.TRAFFIC_GAME:
+                self._game_event(self.TRAFFIC_GAME[e["kind"]])
 
     # ------------------------------------------------------------- sectors
     def _check_sectors(self, prev: dict, s: dict) -> None:
@@ -774,7 +970,7 @@ class LiveEngine:
                 else:
                     self.coach.pre_corner(idx, rc.corner.name, rc.corner.spoken)
 
-    def _check_corner(self, pct: float) -> None:
+    def _check_corner(self, pct: float, coach: bool = True) -> None:
         ref = self.reference
         buf = self.buf
         if ref is None or buf is None or buf.start is None:
@@ -790,7 +986,8 @@ class LiveEngine:
             rep = compare_corner(me, ref, c, self.track_length() / N_BINS)
             d = rep.to_dict()
             self.callouts.append(d)
-            self.coach.on_corner(self._next_corner - 1, d)
+            if coach:
+                self.coach.on_corner(self._next_corner - 1, d)
 
     def track_length(self) -> float:
         return (self.session.get("track_length") or
@@ -815,6 +1012,8 @@ class LiveEngine:
             "source": "live",
             "fuel_used": fuel_used,
         }
+        if buf.dead_reckoned and lap.has_map():
+            lap.meta["line"] = "reconstructed"
         self.last_lap = lap
         info = {"lap_time": round(lap_time, 3), "valid": buf.valid, "label": lap.label, "file": None,
                 "sectors": [x["time"] for x in self.cur_sectors], "fuel_used": fuel_used}
@@ -830,6 +1029,13 @@ class LiveEngine:
                            self.last_comparison if self.reference is not None else None)
 
         if buf.valid:
+            self._game_event("clean_lap")
+            if self.reference is not None and not self.ref_is_session_best and \
+                    lap_time < self.reference.lap_time and self._beat_ref != self.ref_label:
+                self._beat_ref = self.ref_label
+                self._game_event("beat_reference")
+            if self.session_best is not None and lap_time < self.session_best.lap_time:
+                self._game_event("session_best")
             if self.session_best is None or lap_time < self.session_best.lap_time:
                 self.session_best = lap
                 if self.reference is None or self.ref_is_session_best:
@@ -837,18 +1043,78 @@ class LiveEngine:
             if self.config.record_laps:
                 info["file"] = self._save(lap, when)
         self.laps_done.append(info)
-        if self.config.on("consistency") and self.consistency.active:
+        if self.config.on("traffic"):
+            t = self.traffic.lap_done(self.lap_count, lap_time, buf.valid)
+            info["traffic_s"], info["traffic_lost"] = t["traffic_s"], t.get("lost_s")
+            if buf.valid and not t["in_traffic"]:
+                self._clean_times.append(lap.time.copy())
+        if self.config.on("consistency") and self.consistency.active and not self.race_mode:
             res = self.consistency.add_lap(lap_time, buf.valid,
                                            (self.last_comparison or {}).get("corners") if self.reference else None)
             phrase = self.consistency.spoken(res) if res else None
             if phrase:
                 self.coach._say(phrase, important=True)
+            if res and res.get("inside") is not None:
+                self._game_event("cons_lap", inside=bool(res["inside"]), streak=res.get("streak"))
             if res and res.get("completed") and res.get("streak") == self.consistency.goal:
+                self._game_event("cons_goal")
                 for p in self.coach.plan:              # tick off the plan's consistency run
                     if p.get("consistency") and p["status"] == "active":
-                        p["status"] = "done"
+                        self.coach.finish_step(p)
             info["consistency"] = None if not res else {"inside": res.get("inside"), "delta": res.get("delta")}
+        if self.fuel_save and fuel_used and self.config.on("endurance"):
+            goal = self.fuel_target_per_lap()
+            if goal:
+                ok = buf.valid and fuel_used <= goal + 0.02
+                info["fuel_ok"] = ok
+                self._game_event("fuel_lap", ok=ok)
+        if self.race_rec.active and self.is_race:
+            self.race_rec.add_lap({"lap": self.lap_count, "lap_time": round(lap_time, 3), "valid": buf.valid,
+                                   "pit": buf.pit, "fuel_used": fuel_used, "fuel_ok": info.get("fuel_ok"),
+                                   "fuel_level": (self.last_sample or {}).get("fuel") or None,
+                                   "traffic_s": info.get("traffic_s"),
+                                   "in_traffic": (info.get("traffic_s") or 0) > 3.0})
+            self.race_rec.save(self.traffic.status() if self.config.on("traffic") else None)
         self._record_history(info, lap)
+        self.game.save()
+
+    def _game_event(self, event: str, **data) -> None:
+        if self.config.on("game"):
+            self.game.on(event, **data)
+
+    def fuel_target_per_lap(self) -> float | None:
+        """Fuel per lap to hit in fuel-save mode (litres)."""
+        fs = self.fuel_save or {}
+        if (fs.get("extra_lap") or {}).get("target_fuel_per_lap"):
+            return fs["extra_lap"]["target_fuel_per_lap"]
+        fpl = fs.get("fuel_per_lap")
+        if fpl and fs.get("target_l"):
+            return round(fpl - fs["target_l"], 3)
+        return None
+
+    # -------------------------------------------------------------- training
+    def training_mode(self) -> str:
+        """What you're training right now: free, plan, drill, consistency or fuel."""
+        if any(p.get("status") == "active" for p in self.coach.plan):
+            return "plan"
+        if self.fuel_save:
+            return "fuel"
+        if self.consistency.active:
+            return "consistency"
+        if self.coach.focus.active:
+            return "drill"
+        return "free"
+
+    def stop_training(self, keep_plan: bool = False, keep_fuel: bool = False) -> None:
+        with self.lock:
+            self.coach.stop_focus()
+            self.consistency.stop()
+            if not keep_fuel:
+                self.fuel_save = None
+            if not keep_plan:
+                for p in self.coach.plan:
+                    if p["status"] == "active":
+                        p["status"] = "pending"
 
     def _record_history(self, info: dict, lap: Lap) -> None:
         if not self.config.record_history:
@@ -880,6 +1146,7 @@ class LiveEngine:
         g = self.weekly_goal()
         if g["met"]:
             self._goal_announced = True
+            self._game_event("weekly_goal")
             streak = g["streak"]
             self.coach._say(f"Weekly goal reached. {streak} week streak" if streak > 1 else "Weekly goal reached",
                             important=True)
@@ -968,6 +1235,8 @@ class LiveEngine:
                 "laps": list(self.laps_done)[-15:],
                 "focus": self.coach.focus.status(),
                 "consistency": self.consistency.status(),
+                "race_mode": self.race_mode,
+                "traffic": self.traffic.status() if self.config.on("traffic") else None,
                 "features": dict(self.config.features),
                 "scores": (self.last_comparison or {}).get("scores"),
                 "sector_target_label": self.sector_target_label or (
@@ -1020,6 +1289,12 @@ class LiveEngine:
         if focus.get("active") and focus.get("name"):
             evs = [e for e in evs if e["corner"] == focus["name"]]
         recent = evs[-4:]
+        racing = self.race_mode
+        cue = snap.get("brake_cue")
+        if racing:                                     # race overlay: no training, keep fuel-save lift cues
+            recent, focus = [], {}
+            if not (cue and cue.get("kind") == "lift"):
+                cue = None
         return {
             "visible": visible,
             "mode": mode,
@@ -1029,20 +1304,29 @@ class LiveEngine:
             "predicted": snap.get("predicted"),
             "ref_lap_time": snap.get("ref_lap_time"),
             "has_reference": bool(snap.get("reference")),
-            "brake_cue": snap.get("brake_cue"),
+            "brake_cue": cue,
             "next_corner": snap.get("next_corner"),
             "events": recent,
+            "race_mode": racing,
             "sectors": snap.get("sectors", []) if self.config.on("sectors") else [],
             "sector_count": len(self.sector_starts()) if self.config.on("sectors") else 0,
             "units": self.config.units,
             "focus": focus if self.config.on("drills") else {},
             "fuel": self._fuel_overlay() if self.config.on("endurance") else None,
-            "consistency": self.consistency.status() if (self.config.on("consistency")
+            "consistency": self.consistency.status() if (self.config.on("consistency") and not racing
                                                          and self.consistency.active) else None,
             "features": dict(self.config.features),
+            "game": self.game.overlay() if self.config.on("game") and not racing else None,
+            "traffic": self._traffic_overlay() if self.config.on("traffic") else None,
             "voice": self.coach.voice.recent(5),
             "voice_mode": self.config.voice_mode,
         }
+
+    def _traffic_overlay(self) -> dict:
+        tr = self.traffic
+        last = tr.events[-1] if tr.events and self.last_sample and \
+            self.last_sample["session_time"] - tr.events[-1]["t"] < 6 else None
+        return {"warning": tr.warning, "nearby": tr.nearby[:5], "last": last}
 
     def _fuel_overlay(self) -> dict | None:
         s = self.last_sample or {}

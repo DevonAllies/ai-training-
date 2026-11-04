@@ -110,6 +110,8 @@ All feedback is measured against your reference lap, which must have telemetry: 
 
 ## Racing line and car control
 
+iRacing doesn't send GPS (Lat/Lon) in live telemetry; it only writes it into `.ibt` files. So SimCoach rebuilds the line of every lap you drive from heading, speed and slip angle, closes it into a loop and fits it onto the reference line. In tests this is accurate to about half a metre. Laps recorded before 0.8 have no line. Teammate `.ibt` files have real GPS.
+
 On **Analyse**, the **racing line** card compares your line with the reference using the GPS position iRacing records:
 
 - **Offset chart:** how far left or right of the reference line you are all round the lap.
@@ -190,9 +192,91 @@ At the top of the **Progress** tab you can set a weekly goal: **minutes on track
 
 Time on track is measured live (pit lane and pauses don't count).
 
+## Training hub on your phone
+
+Open **`/train`** on your phone (Settings → Tablet / phone; the QR code opens the training hub by default). From the phone you can:
+
+- **Pick what you train:** practice plan, corner drill (choose the corner and drill, or let the coach pick), consistency run (window and laps in a row), fuel saving (+1 lap or 0.1 L per lap), or free driving. Starting one stops the others.
+- **See what's running:** the active quest, drill streak, consistency streak or fuel laps on target.
+- **Switch training features on or off.** Other settings, quit, restart and delete stay limited to the PC.
+
+## Widgets
+
+Small single-purpose pages for a phone, tablet, second monitor or OBS browser source:
+
+| Widget | Shows |
+|---|---|
+| `/widget/plan` | The practice plan as a quest path, with XP, combo, daily challenge and badges |
+| `/widget/consistency` | Streak ring, target ± window, a dot per lap, score and spread |
+| `/widget/endurance` | Fuel, laps of fuel, laps to go, fuel to finish, stops, pit window, stint pace |
+| `/widget/fuel` | Fuel-save target per lap and which laps hit it |
+| `/widget/racecraft` | Cars around you, faster-car warning, clean passes / let-bys / defending, incidents |
+
+Add `?transparent=1` for OBS, or `?readonly=1` to hide the buttons.
+
+## Race mode and race report
+
+In race sessions SimCoach switches the training off: no corner calls, brake cues, drills, consistency trainer or game pop-ups. You keep the delta, fuel, fuel-save lift cues and faster-car warnings. Race mode is on by default; switch it off in Settings to keep training on in races. In races the overlay only shows if the overlay is set to **Always** (the default is practice only), and then as the stripped race version.
+
+It also records a **race report**. Open it from the Race tab or the phone training page (`/race-report`). It updates live during the race and can be printed or saved as PDF. It covers:
+
+- **Result:** start and finish position, overall and in class, plus your position on every lap.
+- **Pace and consistency:** best and typical lap, spread, the share of laps within 0.5 s of your typical lap, and the laps more than 1 s off.
+- **Stints:** laps, average and best, pace drop-off per lap (tyre wear; mistakes are left out of the trend) and fuel per lap.
+- **Tyres:** wear and carcass temperatures for each corner of the car, and wear per lap per stint. iRacing only sends tyre data while you're stopped in your pit stall, so this needs a pit stop; without one, the pace drop-off stands in for tyre wear.
+- **Fuel:** per lap, total, fuel left (spare-fuel advice only once the chequered flag is out), and fuel-save laps on target.
+- **Racecraft:** score, clean passes and let-bys, defending, incidents, traffic cost, and every move.
+- **Key takeaways** written from all of the above.
+
+The newest 50 race reports are kept in the `races` folder.
+
+## Racecraft: clean passes and good racing
+
+This works with real traffic: races, iRacing AI races (great for practising traffic) and open practice. SimCoach reads every car's position on track, its class, the spotter's left/right flag and your incident count.
+
+- **Clean pass:**
+  - A car close to you goes from ahead to behind and stays there for 3 s.
+  - It's clean if you got no new incident points and didn't go off track in the 5 s before or 3 s after.
+  - It also shows what the pass cost you, compared with *your usual time over that stretch* (median of your recent clean laps).
+- **Lapping a slower class:** counts as clean if it cost you less than 0.3 s.
+- **Clean let-by:** a faster class goes past you with no incident and costs you under 0.5 s. If it costs more, the tip is: hold your line and lift a little on the straight.
+- **Defending:** a same-class car stays within 0.6 s behind you for 20 s and doesn't get by.
+- **Battles:** swapping places with the same car again and again within 30 s counts as one battle, not many passes.
+- **Faster-car warning:** a faster class closing within 3 s. It gives the gap and the corner where it will catch you ("FASTER GTP 2.9s · AT C3"), so you can plan where to let it by. It appears in the in-game window and the browser overlay, and is spoken.
+- **Contact:** incident points during a battle count as contact, and contact breaks your game combo.
+- **Racecraft score (0–100):** the share of clean moves, minus 4 points per incident point.
+- **Traffic time:** what laps in traffic cost you compared with your clean laps.
+- **Widget:** `/widget/racecraft` shows the gap bar around you (purple = faster class), the nearby cars, your counts and the last moves.
+
+XP: clean pass 30, clean let-by 15, defended 20 (all with the combo multiplier). Badges: Clean racer, Good neighbour, Iron wall. Spoken calls follow the voice coach's "practice only" setting, so switch that off to hear them in races.
+
+Ghost cars aren't used: SimCoach can't put cars on the iRacing track, so it only coaches real traffic.
+
+## Training game
+
+Training is repetitive on purpose, so SimCoach keeps score:
+
+- **XP:**
+  - clean lap: 10
+  - new session best: 25
+  - beating your reference: 60
+  - drill attempt on target: 6
+  - finished drill: 50
+  - finished practice-plan step ("quest"): 40
+  - finished whole plan ("boss"): +150
+  - lap inside the consistency window: 8
+  - fuel-save lap on target: 15
+  - weekly goal: 200
+- **Combo:** hits in a row multiply XP: x2 from 3, x3 from 6, x4 from 10. A miss resets it.
+- **Levels:** Rookie → Club Racer → … → Alien.
+- **Daily challenge:** one task a day, worth +75 XP.
+- **14 badges:** for example Late braker (finish a brake ladder), Robot (10 consistent laps in a row), Fuel whisperer.
+- **Where it shows:** the in-game browser overlay shows your level, combo and XP pops. The voice announces level-ups, badges and the daily challenge.
+- **Storage:** progress is kept in `game.json` in the SimCoach folder.
+
 ## Training features on/off
 
-**Settings → Training features** switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, and progress/practice plan. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
+**Settings → Training features** (or the phone's training hub) switches each part on or off: live corner feedback, the overlay brake cue, sector times, corner drills, the consistency trainer, race/endurance/fuel saving, progress/practice plan, weekly goal and the training game. A switched-off feature disappears from the dashboard, overlay and voice. The voice coach has its own setting.
 
 ## Session report and practice plan
 
