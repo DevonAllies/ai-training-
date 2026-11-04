@@ -44,6 +44,7 @@ FEATURES = {
     "endurance": "Race, endurance & fuel saving",
     "practice": "Progress & practice plan",
     "goals": "Weekly training goal & streak",
+    "traffic": "Racecraft (clean passes, let-bys, defending, faster-car warnings)",
     "game": "Training game (XP, levels, combos, daily challenge, badges)",
 }
 

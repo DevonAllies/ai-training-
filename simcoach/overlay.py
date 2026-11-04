@@ -292,6 +292,15 @@ class OverlayWindow:
                 c.create_text(x0 + w / 2, y + 11 * k, text=txt, fill=FG,
                               font=font(8 if n > 5 else 9, True, True))
 
+        # --- racecraft: faster car closing from behind (drawn above the sectors)
+        w_ = (st.get("traffic") or {}).get("warning")
+        if w_:
+            y = self.H * k - (58 if n else 30) * k
+            c.create_rectangle(12 * k, y, W - 12 * k, y + 22 * k, fill="#3a2a5c", width=0)
+            where = f"  ·  AT {w_['corner']}" if w_.get("corner") else ""
+            c.create_text(W / 2, y + 11 * k, text=f"FASTER {(w_.get('class') or 'CAR').upper()} {w_['gap_s']}s{where}",
+                          fill="#e8dcff", font=font(10, True))
+
 
 def run_overlay(get_state, config: Config, on_quit=None, stop_event=None) -> None:
     OverlayWindow(get_state, config, on_quit, stop_event).run()

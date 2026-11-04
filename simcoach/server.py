@@ -1033,6 +1033,12 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
             engine.stop_training()
         return training_state()
 
+    @app.get("/api/traffic")
+    def traffic_status():
+        need("traffic")
+        with engine.lock:
+            return engine.traffic.status()
+
     @app.get("/api/game")
     def game_status():
         need("game")
@@ -1043,6 +1049,8 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
         """Everything the small widgets need, in one poll."""
         st = training_state()
         st["race"] = engine.race_status() if config.on("endurance") else None
+        with engine.lock:
+            st["traffic"] = engine.traffic.status() if config.on("traffic") else None
         with engine.lock:
             snap_s = engine.last_sample or {}
             st["session_type"] = engine.session_type
@@ -1055,8 +1063,8 @@ def create_app(engine: LiveEngine, config: Config, demo_mode: bool = False, upda
 
     @app.get("/widget/{name}")
     def widget_page(name: str):
-        if name not in ("consistency", "endurance", "fuel", "plan"):
-            raise HTTPException(404, "Widgets: consistency, endurance, fuel, plan")
+        if name not in ("consistency", "endurance", "fuel", "plan", "racecraft"):
+            raise HTTPException(404, "Widgets: consistency, endurance, fuel, plan, racecraft")
         return FileResponse(STATIC / "widget.html")
 
     @app.get("/api/goals")

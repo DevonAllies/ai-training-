@@ -110,6 +110,8 @@ All feedback is measured against your reference lap, which must have telemetry: 
 
 ## Racing line and car control
 
+iRacing doesn't send GPS (Lat/Lon) in live telemetry; it only writes it into `.ibt` files. So SimCoach rebuilds the line of every lap you drive from heading, speed and slip angle, closes it into a loop and fits it onto the reference line. In tests this is accurate to about half a metre. Laps recorded before 0.8 have no line. Teammate `.ibt` files have real GPS.
+
 On **Analyse**, the **racing line** card compares your line with the reference using the GPS position iRacing records:
 
 - **Offset chart:** how far left or right of the reference line you are all round the lap.
@@ -208,8 +210,31 @@ Small single-purpose pages for a phone, tablet, second monitor or OBS browser so
 | `/widget/consistency` | Streak ring, target ± window, a dot per lap, score and spread |
 | `/widget/endurance` | Fuel, laps of fuel, laps to go, fuel to finish, stops, pit window, stint pace |
 | `/widget/fuel` | Fuel-save target per lap and which laps hit it |
+| `/widget/racecraft` | Cars around you, faster-car warning, clean passes / let-bys / defending, incidents |
 
 Add `?transparent=1` for OBS, or `?readonly=1` to hide the buttons.
+
+## Racecraft: clean passes and good racing
+
+This works with real traffic: races, iRacing AI races (great for practising traffic) and open practice. SimCoach reads every car's position on track, its class, the spotter's left/right flag and your incident count.
+
+- **Clean pass:**
+  - A car close to you goes from ahead to behind and stays there for 3 s.
+  - It's clean if you got no new incident points and didn't go off track in the 5 s before or 3 s after.
+  - It also shows what the pass cost you, compared with *your usual time over that stretch* (median of your recent clean laps).
+- **Lapping a slower class:** counts as clean if it cost you less than 0.3 s.
+- **Clean let-by:** a faster class goes past you with no incident and costs you under 0.5 s. If it costs more, the tip is: hold your line and lift a little on the straight.
+- **Defending:** a same-class car stays within 0.6 s behind you for 20 s and doesn't get by.
+- **Battles:** swapping places with the same car again and again within 30 s counts as one battle, not many passes.
+- **Faster-car warning:** a faster class closing within 3 s. It gives the gap and the corner where it will catch you ("FASTER GTP 2.9s · AT C3"), so you can plan where to let it by. It appears in the in-game window and the browser overlay, and is spoken.
+- **Contact:** incident points during a battle count as contact, and contact breaks your game combo.
+- **Racecraft score (0–100):** the share of clean moves, minus 4 points per incident point.
+- **Traffic time:** what laps in traffic cost you compared with your clean laps.
+- **Widget:** `/widget/racecraft` shows the gap bar around you (purple = faster class), the nearby cars, your counts and the last moves.
+
+XP: clean pass 30, clean let-by 15, defended 20 (all with the combo multiplier). Badges: Clean racer, Good neighbour, Iron wall. Spoken calls follow the voice coach's "practice only" setting, so switch that off to hear them in races.
+
+Ghost cars aren't used: SimCoach can't put cars on the iRacing track, so it only coaches real traffic.
 
 ## Training game
 

@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 os.environ.setdefault("SIMCOACH_HOME", tempfile.mkdtemp(prefix="simcoach_test_"))
 os.environ["SIMCOACH_NO_NATIVE_VOICE"] = "1"   # never talk out loud during tests
@@ -91,7 +92,7 @@ def test_lap_buffer_and_engine_with_simulated_samples():
     # feed 2.5 laps of synthetic samples at 60 Hz without real time passing
     src = eng.source
     for _ in range(int(60 * demo.reference_lap().lap_time * 2.6)):
-        src._last -= 1 / 60  # pretend 1/60 s elapsed
+        src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed  # pretend 1/60 s elapsed
         eng._process(src.read())
     assert len(eng.laps_done) >= 2
     lap_info = eng.laps_done[0]
@@ -174,7 +175,7 @@ def _drive(eng, laps=2.3):
     src = eng.source
     eng.session = src.session()
     for _ in range(int(60 * demo.reference_lap().lap_time * laps)):
-        src._last -= 1 / 60
+        src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
         eng._process(src.read())
 
 
@@ -253,8 +254,12 @@ def test_voice_queue_is_bounded_and_deduped():
 
 
 def test_session_coach_report_focus_and_cues():
-    eng = LiveEngine(Config(record_laps=False, voice_native=False), DemoSource())
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
     eng.coach.voice.native = False
+    spoken = []                                          # every phrase (the voice log only keeps the last 20)
+    say = eng.coach.voice.say
+    eng.coach.voice.say = lambda text, **kw: (spoken.append(text), say(text, **kw))[1]
     eng.set_reference(demo.reference_lap())
     _drive(eng, 3.6)
     rep = eng.coach.report()
@@ -262,7 +267,6 @@ def test_session_coach_report_focus_and_cues():
     worst = max(rep["corners"], key=lambda c: c["avg_loss"])
     assert worst["name"] in ("C3", "C7") and worst["main_issue"]
     assert rep["summary"]
-    spoken = [v["text"] for v in eng.coach.voice.log]
     assert any(t.startswith("C3,") for t in spoken)       # pre-corner cue from last lap's mistake
     # drill mode picks the worst corner automatically
     st = eng.coach.start_focus(None)
@@ -332,13 +336,16 @@ def test_no_memory_growth_over_long_session():
     eng.coach.history = _c.deque(maxlen=5)
     eng.race.max_laps = 5
     eng.coach.voice.log = _c.deque(maxlen=5)
+    eng.traffic.events = _c.deque(maxlen=5)
+    eng.traffic.laps = _c.deque(maxlen=5)
+    eng.game.feed = _c.deque(maxlen=5)
     src = eng.source
     eng.session = src.session()
     per_lap = int(60 * 90)
 
     def run(laps):
         for _ in range(per_lap * laps):
-            src._last -= 1 / 60
+            src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
             eng._process(src.read())
             eng.snapshot() if _ % 3 == 0 else None
             eng.overlay() if _ % 3 == 0 else None
@@ -349,7 +356,7 @@ def test_no_memory_growth_over_long_session():
     def to_lap_end():                       # measure at the same point of a lap each time
         n = eng.lap_count
         while eng.lap_count == n:
-            src._last -= 1 / 60
+            src._last = time.monotonic() - 1 / 60    # fixed 1/60 s step, independent of machine speed
             eng._process(src.read())
 
     run(2)                                  # settle one-off allocations (first comparisons, history file)
@@ -364,6 +371,7 @@ def test_no_memory_growth_over_long_session():
     # separate laps until the latest lap becomes the best). A per-lap leak of >=13 KB fails this.
     assert spread < 150_000, f"memory not flat over 12 laps: {[round(x / 1024) for x in samples]} KiB"
     assert len(eng.events) <= 60 and len(eng.coach.history) <= 5 and len(eng.race.laps) <= 5
+    assert len(eng.traffic._hist) <= 120 and len(eng._clean_times) <= 5 and len(eng.traffic._last_ev) <= 128
 
 
 # ------------------------------------------------------------------ v4: auto-update
@@ -1135,3 +1143,86 @@ def test_racing_line_rebuilt_from_heading_and_speed():
         buf.add({"pct": i / 2001, "speed": 50, "throttle": 1, "brake": 0, "gear": 4, "steer": 0,
                  "session_time": i * 0.04, "on_pit_road": False, "surface": 3})
     assert not buf.to_lap(4200).has_map()
+
+
+# ------------------------------------------------- v12: racecraft (real traffic)
+def _tr_run(tr, steps, me_pct, cars_pct, t0=0.0, dt=0.1, incidents=None, lr=1, elapsed0=10.0, surf=None):
+    """Drive the tracker: me_pct(t) and cars_pct(t) -> list per car."""
+    evs = []
+    for k in range(steps):
+        t = t0 + k * dt
+        pc = cars_pct(t)
+        inc = incidents(t) if callable(incidents) else incidents
+        evs += tr.update(t, 0, me_pct(t), 50.0, 3, {"pct": [me_pct(t)] + pc, "surface": surf or [3] * (len(pc) + 1),
+                                                     "pit": [False] * (len(pc) + 1)},
+                         lr, inc, elapsed0 + t, None, lap_id=0)
+    return evs
+
+
+def test_racecraft_passes_letbys_contact_and_defending():
+    from simcoach.traffic import TrafficTracker
+    drivers = {0: {"name": "Me", "number": "1", "class": "GT3", "class_id": 1, "est_lap": 90},
+               1: {"name": "Slow", "number": "21", "class": "GT3", "class_id": 1, "est_lap": 92},
+               2: {"name": "Proto", "number": "7", "class": "GTP", "class_id": 2, "est_lap": 80}}
+
+    def fresh():
+        tr = TrafficTracker()
+        tr.set_drivers(drivers, 0)
+        tr.track_length = 4000.0
+        tr.typical = lambda a, b: (b - a) * 80.0              # 50 m/s over 4 km -> 80 s per lap
+        return tr
+    me = lambda t: 0.10 + t * 50 / 4000                      # noqa: E731 - 50 m/s
+    # 1) I pass car 1 (it does 45 m/s), cleanly
+    tr = fresh()
+    evs = _tr_run(tr, 250, me, lambda t: [0.12 + t * 45 / 4000, 0.6])
+    assert [e["kind"] for e in evs] == ["clean_pass"] and tr.counts["clean_pass"] == 1
+    # 2) same pass with an incident -> not clean
+    tr = fresh()
+    evs = _tr_run(tr, 250, me, lambda t: [0.12 + t * 45 / 4000, 0.6], incidents=lambda t: 0 if t < 15 else 4)
+    kinds = [e["kind"] for e in evs]
+    assert "contact" in kinds and "dirty_pass" in kinds and tr.score() < 50
+    # 3) faster class closes, gets a warning, then a clean let-by
+    tr = fresh()
+    evs = _tr_run(tr, 300, me, lambda t: [0.9, 0.10 - 0.04 + t * 60 / 4000])
+    kinds = [e["kind"] for e in evs]
+    assert kinds[0] == "warning" and "clean_letby" in kinds
+    assert tr.status()["counts"]["clean_letby"] == 1
+    # 4) wrap-around half a lap away isn't a pass; cars in the pits are ignored
+    tr = fresh()
+    evs = _tr_run(tr, 100, lambda t: 0.1, lambda t: [0.6 + (0.0005 if t > 5 else -0.0005), 0.11],
+                  surf=[3, 3, 1])
+    assert not [e for e in evs if e["kind"] not in ("warning",)]
+    # 5) swapping places again and again with the same car is one battle
+    tr = fresh()
+    osc = lambda t: [0.10 + t * 50 / 4000 + (0.002 if (t // 6) % 2 else -0.002), 0.6]   # noqa: E731
+    evs = _tr_run(tr, 400, me, osc)
+    scored = [e for e in evs if e["kind"] in ("clean_pass", "lost_position")]
+    assert len(scored) <= 2 and tr.counts["battle_swap"] >= 2
+    # 6) same-class car sits 0.4 s behind for 25 s, then drops back -> defended
+    tr = fresh()
+    behind = lambda t: [0.10 + t * 50 / 4000 - (20 / 4000 if t < 25 else (20 + (t - 25) * 10) / 4000), 0.6]  # noqa: E731
+    evs = _tr_run(tr, 350, me, behind)
+    assert "defended" in [e["kind"] for e in evs]
+    # bounded
+    assert len(tr.events) <= 50 and len(tr._hist) <= 120
+
+
+def test_racecraft_live_demo_traffic_game_and_widget():
+    from fastapi.testclient import TestClient
+    from simcoach.server import create_app
+    cfg = Config(record_laps=False, voice_native=False)
+    eng = LiveEngine(cfg, DemoSource())
+    eng.set_reference(demo.reference_lap())
+    client = TestClient(create_app(eng, cfg, demo_mode=True))
+    xp0 = eng.game.stats["clean_pass"]
+    _drive(eng, 2.8)
+    st = client.get("/api/traffic").json()
+    kinds = [e["kind"] for e in st["events"]]
+    assert "clean_pass" in kinds and "warning" in kinds and "clean_letby" in kinds, kinds
+    assert st["score"] is not None and st["nearby"] is not None
+    assert eng.game.stats["clean_pass"] > xp0
+    assert client.get("/widget/racecraft").status_code == 200
+    assert client.get("/api/widget").json()["traffic"]["counts"]
+    assert "traffic" in eng.overlay()
+    client.post("/api/features", json={"features": {"traffic": False}})
+    assert client.get("/api/traffic").status_code == 409 and eng.overlay()["traffic"] is None

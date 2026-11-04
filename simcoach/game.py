@@ -42,6 +42,9 @@ XP = {
     "fuel_lap": 15,
     "weekly_goal": 200,
     "daily": 75,
+    "clean_pass": 30,
+    "clean_letby": 15,
+    "defended": 20,
 }
 
 TITLES = ["Rookie", "Club Racer", "Amateur", "Pro-Am", "Semi-Pro", "Pro", "Works Driver", "Champion",
@@ -62,6 +65,9 @@ BADGES = {
     "daily3": ("Daily grinder", "Finish 3 daily challenges"),
     "laps100": ("Century", "100 clean laps"),
     "level5": ("Moving up", "Reach level 5"),
+    "clean5": ("Clean racer", "5 clean passes"),
+    "letby5": ("Good neighbour", "5 clean let-bys for faster cars"),
+    "defend3": ("Iron wall", "Defend your position 3 times"),
 }
 
 # Daily challenges: (id, text, event counted, how many)
@@ -73,6 +79,7 @@ DAILIES = [
     ("drills", "Finish 2 corner drills", "drill_done", 2),
     ("combo", "Reach a combo of 6", "combo", 6),
     ("fuel", "3 fuel-save laps on target", "fuel_lap", 3),
+    ("race", "3 clean passes or let-bys", "racecraft", 3),
 ]
 
 MAX_FEED = 25
@@ -284,6 +291,22 @@ class TrainingGame:
                     self.stats[event] -= 1
                     self._miss()
                     return
+            elif event in ("clean_pass", "clean_letby", "defended"):
+                m = self._hit()
+                label = {"clean_pass": "Clean pass", "clean_letby": "Clean let-by", "defended": "Defended"}[event]
+                self._award(XP[event] * m, label + (f" x{m}" if m > 1 else ""), event)
+                n = self.stats[event]
+                if event == "clean_pass" and n >= 5:
+                    self._badge("clean5")
+                if event == "clean_letby" and n >= 5:
+                    self._badge("letby5")
+                if event == "defended" and n >= 3:
+                    self._badge("defend3")
+                self._count_daily("racecraft")
+            elif event == "contact":
+                self._miss()
+                self.feed.append({"t": time.time(), "xp": 0, "kind": "contact", "text": "Contact - combo lost"})
+                return
             elif event == "weekly_goal":
                 y, w, _ = self._today().isocalendar()
                 week = f"{y}-W{w:02d}"

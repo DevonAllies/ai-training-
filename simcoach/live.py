@@ -31,6 +31,7 @@ from . import history
 from .coach import SessionCoach
 from .consistency import ConsistencyTrainer
 from .game import TrainingGame
+from .traffic import TrafficTracker
 from .race import RaceTracker, extra_lap_target, lift_plan
 from .config import Config, laps_dir
 from .corners import apply_names
@@ -118,9 +119,23 @@ class IRacingSource(TelemetrySource):
                 time_remain=_f(ir["SessionTimeRemain"], -1.0),
                 laps_remain=_f(ir["SessionLapsRemainEx"], -1.0),
                 track_temp=_f(ir["TrackTempCrew"]),
+                traffic=self._traffic(ir),
             )
         finally:
             ir.unfreeze_var_buffer_latest()
+
+    @staticmethod
+    def _traffic(ir) -> dict | None:
+        """Every car's lap position / surface / pit flag, the spotter flag and my incident count."""
+        try:
+            return {"me": int(ir["PlayerCarIdx"] or 0),
+                    "pct": list(ir["CarIdxLapDistPct"] or []),
+                    "surface": list(ir["CarIdxTrackSurface"] or []),
+                    "pit": list(ir["CarIdxOnPitRoad"] or []),
+                    "left_right": int(ir["CarLeftRight"] or 1),
+                    "incidents": ir["PlayerCarMyIncidentCount"]}
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def session(self) -> dict:
         ir = self.ir
@@ -151,6 +166,13 @@ class IRacingSource(TelemetrySource):
             "session_lengths": {int(s.get("SessionNum", i)): {"laps": s.get("SessionLaps"),
                                                               "time": s.get("SessionTime")}
                                 for i, s in enumerate(sessions)},
+            "my_idx": drv.get("DriverCarIdx"),
+            "drivers": {int(d.get("CarIdx", -1)): {
+                "name": d.get("UserName", ""), "number": str(d.get("CarNumber", "")),
+                "class": d.get("CarClassShortName") or d.get("CarScreenNameShort") or "",
+                "class_id": d.get("CarClassID"), "est_lap": _f(d.get("CarClassEstLapTime")) or None,
+                "pace": bool(d.get("CarIsPaceCar")), "spectator": bool(d.get("IsSpectator"))}
+                for d in drv.get("Drivers", []) or []},
         }
         return self._session_cache
 
@@ -170,6 +192,15 @@ class DemoSource(TelemetrySource):
         self.lap = 0
         self._new_profile()
         self._last = time.monotonic()
+        _r = demo.reference_lap()
+        self._ref_v, self._ref_t = _r.speed, _r.lap_time
+        # demo traffic: (idx, name, number, class, class_id, lap time, start pct)
+        self.cars = [
+            [1, "Fast Prototype", "7", "GTP", 2, 79.0, 0.62],
+            [2, "Slow Sam", "21", "GT3", 1, 95.0, 0.985],
+            [3, "Close Carla", "44", "GT3", 1, 89.6, 0.925],
+            [4, "Rookie GT4", "88", "GT4", 3, 101.0, 0.20],
+        ]
 
     def _new_profile(self):
         self._lapno = getattr(self, "_lapno", 0) + 1
@@ -209,14 +240,33 @@ class DemoSource(TelemetrySource):
             "yaw": at(self._yaw), "latacc": at(self._latacc), "rpm": at(self._rpm), "abs": at(self._abs),
             "fuel": self.fuel_level, "fuel_per_hour": (0.002 + 0.045 * thr) * 3600 * 0.75,
             "time_remain": max(0.0, 6 * 3600 - self.session_time), "laps_remain": -1.0, "track_temp": 30.0,
+            "traffic": self._traffic(dt),
         }
+
+    def _traffic(self, dt: float) -> dict:
+        pct = [self.pct] + [0.0] * len(self.cars)
+        lr = 1
+        ref = self._ref_v
+        for c in self.cars:                     # follow a real speed profile, scaled to the car's pace
+            v = float(np.interp(c[6], GRID, ref, period=1.0)) * self._ref_t / c[5]
+            c[6] = (c[6] + v * dt / demo.TRACK_LENGTH) % 1.0
+            pct[c[0]] = c[6]
+            r = ((c[6] - self.pct + 0.5) % 1.0) - 0.5
+            if abs(r * demo.TRACK_LENGTH) < 6:
+                lr = 2 if lr == 1 else 4
+        return {"me": 0, "pct": pct, "surface": [3] * len(pct), "pit": [False] * len(pct),
+                "left_right": lr, "incidents": 0}
 
     def session(self) -> dict:
         return {"track": "Demo Ring", "track_config": "GP", "track_id": None,
                 "track_length": demo.TRACK_LENGTH, "car": "Demo GT3", "car_id": None,
                 "driver": "You", "session_types": {0: "Practice"},
                 "sectors": [0.0, 0.25, 0.5, 0.75], "fuel_max_l": demo.FUEL_TANK_L,
-                "session_lengths": {0: {"laps": "unlimited", "time": "21600.0000 sec"}}}
+                "session_lengths": {0: {"laps": "unlimited", "time": "21600.0000 sec"}},
+                "my_idx": 0,
+                "drivers": {0: {"name": "You", "number": "1", "class": "GT3", "class_id": 1, "est_lap": 90.0},
+                            **{c[0]: {"name": c[1], "number": c[2], "class": c[3], "class_id": c[4],
+                                      "est_lap": c[5]} for c in self.cars}}}
 
 
 def _f(v, default: float = 0.0) -> float:
@@ -478,6 +528,10 @@ class LiveEngine:
         self.game.say = lambda text: self.coach._say(text, important=True)
         self.coach.listener = self._game_event
         self._beat_ref = ""                        # reference label already beaten (XP once per reference)
+        self.traffic = TrafficTracker()
+        self.traffic.typical = self._typical_time
+        self._traffic_t = -1.0
+        self._clean_times: collections.deque = collections.deque(maxlen=5)   # time arrays of clean laps
         self.status_msg = "Waiting for iRacing…"
         self._next_corner = 0
 
@@ -588,7 +642,10 @@ class LiveEngine:
                 changed = (sess.get("track"), sess.get("car")) != \
                     (self.session.get("track"), self.session.get("car"))
                 self.session = sess
+                self.traffic.set_drivers(sess.get("drivers") or {}, sess.get("my_idx"))
+                self.traffic.track_length = sess.get("track_length") or self.track_length()
                 if changed:
+                    self.traffic.reset()
                     self.best_live_sectors = None
                     self.race.reset()
                     self.fuel_save = None
@@ -674,6 +731,50 @@ class LiveEngine:
                 self._check_phases(s)
             self._check_cues(s["pct"])
         self._check_corner(s["pct"])
+        self._check_traffic(s)
+
+    # ------------------------------------------------------------- racecraft
+    TRAFFIC_GAME = {"clean_pass": "clean_pass", "clean_letby": "clean_letby", "defended": "defended",
+                    "contact": "contact", "dirty_pass": "contact"}
+
+    def _typical_time(self, a: float, b: float) -> float | None:
+        """Your usual time from lap position a to b (median of recent clean laps; else the reference)."""
+        if b <= a:
+            return None
+        laps = list(self._clean_times) or ([self.session_best.time] if self.session_best is not None else []) \
+            or ([self.reference.time] if self.reference is not None else [])
+        if not laps:
+            return None
+        vals = sorted(float(np.interp(b, GRID, t) - np.interp(a, GRID, t)) for t in laps)
+        return vals[len(vals) // 2]
+
+    def _check_traffic(self, s: dict) -> None:
+        tr = s.get("traffic")
+        if not tr or not self.config.on("traffic") or s["session_time"] - self._traffic_t < 0.1:
+            return
+        self._traffic_t = s["session_time"]
+        if not self.traffic.drivers and self.session.get("drivers"):
+            self.traffic.set_drivers(self.session["drivers"], self.session.get("my_idx"))
+            self.traffic.track_length = self.track_length()
+        buf = self.buf
+        elapsed = s["session_time"] - buf.start if buf is not None and buf.start is not None else None
+        names = {i: c.title for i, c in enumerate(self.ref_corners)}
+
+        def corner_at(pct: float) -> str | None:
+            if not self.ref_corners:
+                return None
+            for c in self.ref_corners:
+                if GRID[c.start] <= pct <= GRID[c.end]:
+                    return c.title or c.name
+            return names.get(self._corner_after(pct) % len(self.ref_corners))
+        evs = self.traffic.update(s["session_time"], tr.get("me", 0), s["pct"], s["speed"], s.get("surface", 3),
+                                  tr, tr.get("left_right", 1), tr.get("incidents"), elapsed, corner_at,
+                                  lap_id=self.lap_count)
+        for e in evs:
+            if e.get("say"):
+                self.coach._say(e["say"], important=True)
+            if e["kind"] in self.TRAFFIC_GAME:
+                self._game_event(self.TRAFFIC_GAME[e["kind"]])
 
     # ------------------------------------------------------------- sectors
     def _check_sectors(self, prev: dict, s: dict) -> None:
@@ -881,6 +982,11 @@ class LiveEngine:
             if self.config.record_laps:
                 info["file"] = self._save(lap, when)
         self.laps_done.append(info)
+        if self.config.on("traffic"):
+            t = self.traffic.lap_done(self.lap_count, lap_time, buf.valid)
+            info["traffic_s"], info["traffic_lost"] = t["traffic_s"], t.get("lost_s")
+            if buf.valid and not t["in_traffic"]:
+                self._clean_times.append(lap.time.copy())
         if self.config.on("consistency") and self.consistency.active:
             res = self.consistency.add_lap(lap_time, buf.valid,
                                            (self.last_comparison or {}).get("corners") if self.reference else None)
@@ -1061,6 +1167,7 @@ class LiveEngine:
                 "laps": list(self.laps_done)[-15:],
                 "focus": self.coach.focus.status(),
                 "consistency": self.consistency.status(),
+                "traffic": self.traffic.status() if self.config.on("traffic") else None,
                 "features": dict(self.config.features),
                 "scores": (self.last_comparison or {}).get("scores"),
                 "sector_target_label": self.sector_target_label or (
@@ -1134,9 +1241,16 @@ class LiveEngine:
                                                          and self.consistency.active) else None,
             "features": dict(self.config.features),
             "game": self.game.overlay() if self.config.on("game") else None,
+            "traffic": self._traffic_overlay() if self.config.on("traffic") else None,
             "voice": self.coach.voice.recent(5),
             "voice_mode": self.config.voice_mode,
         }
+
+    def _traffic_overlay(self) -> dict:
+        tr = self.traffic
+        last = tr.events[-1] if tr.events and self.last_sample and \
+            self.last_sample["session_time"] - tr.events[-1]["t"] < 6 else None
+        return {"warning": tr.warning, "nearby": tr.nearby[:5], "last": last}
 
     def _fuel_overlay(self) -> dict | None:
         s = self.last_sample or {}
